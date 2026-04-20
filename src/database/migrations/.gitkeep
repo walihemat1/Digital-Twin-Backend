@@ -1,0 +1,4 @@
+
+// The purpose of this file is to ensure the migrations directory is tracked by git,
+// even if there are no migration scripts present yet. This allows the folder to appear
+// in version control and ensures that it is available for future database migration files.
