@@ -1,0 +1,15 @@
+// this is the configuration for the auth module. It is used to store the configuration values for the auth module. The auth module is responsible for the authentication and authorization of the application. the auth module should include the following configuration values: access token secret, access token expires in, refresh token secret, refresh token expires in, and bcrypt salt rounds. Always remember to import this file in the app.module.ts file e.g (import authConfig from './config/auth.config';). And also remember to add the configuration values to the .env file.
+
+// how does the app.module.ts file know which config file to use?
+// the app.module.ts file knows which config file to use because it is imported in the app.module.ts file. The load function in the app.module.ts file is used to load the config files into the config module, which is then used to get the configuration values.
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('auth', () => ({
+  accessTokenSecret:
+    process.env.JWT_ACCESS_TOKEN_SECRET ?? 'change-this-access-secret',
+  accessTokenExpiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN ?? '15m',
+  refreshTokenSecret:
+    process.env.JWT_REFRESH_TOKEN_SECRET ?? 'change-this-refresh-secret',
+  refreshTokenExpiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN ?? '7d',
+  bcryptSaltRounds: Number(process.env.BCRYPT_SALT_ROUNDS ?? 12),
+}));
