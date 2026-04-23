@@ -1,9 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CommonModule } from './common/common.module';
-import appConfig from './config/app.config';
-import authConfig from './config/auth.config';
-import databaseConfig from './config/database.config';
+import { configLoaders } from './config';
 import { envValidationSchema } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { AdminModule } from './modules/admin/admin.module';
@@ -26,7 +24,7 @@ import { UsersModule } from './modules/users/users.module';
       isGlobal: true, // this is used to make the config module available globally to all the modules in the application.
       cache: true, // this is used to cache the config values so that they are not read from the file on every request.
       expandVariables: true, // this is used to expand the variables in the config file, meaning that if we have a variable in the config file like ${PORT} it will be expanded to the value of the PORT environment variable, this is useful when we have a variable in the config file that is not a string but a number or a boolean for example.
-      load: [appConfig, authConfig, databaseConfig], // this is used to load the config files into the config module coming from the config folder. You need to import the config files here so that they are loaded into the config module.
+      load: [...configLoaders],
       validationSchema: envValidationSchema, // this is used to validate the environment variables coming from the .env file by using the envValidationSchema. This is a schema that defines the environment variables that are allowed in the application.
     }),
     // the modules that are imported here are the modules that are used in the application.
