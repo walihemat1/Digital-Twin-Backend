@@ -23,7 +23,7 @@ export class RegistrationLocationStepDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty()
-  @MinLength(1)
+  @MinLength(5, { message: 'Address line 1 is required.' })
   @MaxLength(512)
   addressLine1!: string;
 
@@ -35,7 +35,7 @@ export class RegistrationLocationStepDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty()
-  @MinLength(1)
+  @MinLength(3, { message: 'City town is required.' })
   @MaxLength(120)
   cityTown!: string;
 
@@ -47,7 +47,7 @@ export class RegistrationLocationStepDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty()
-  @MinLength(4)
-  @MaxLength(64)
+  @MinLength(4, { message: 'Phone number is required.' })
+  @MaxLength(64, { message: 'Phone number must be less than 64 characters.' })
   phoneNumber!: string;
 }

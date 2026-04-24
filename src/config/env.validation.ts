@@ -47,6 +47,20 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_TOKEN_EXPIRES_IN: Joi.string().default('7d'),
   BCRYPT_SALT_ROUNDS: Joi.number().integer().min(10).default(12),
 
+  /** HMAC key for storing opaque refresh + password-reset token fingerprints (min 32 chars in prod). */
+  AUTH_OPAQUE_TOKEN_PEPPER: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().min(8).default('dev-opaque-token-pepper'),
+  }),
+
+  MFA_CODE_TTL_SECONDS: Joi.number().integer().min(60).default(600),
+  PASSWORD_RESET_TTL_SECONDS: Joi.number().integer().min(300).default(3600),
+  /** Base URL for building password reset links, e.g. `https://app.example.com` */
+  FRONTEND_APP_BASE_URL: Joi.string().default('http://localhost:3001'),
+  /** Path appended to base; reset link: `${FRONTEND_APP_BASE_URL}${PASSWORD_RESET_PATH}?token=...` */
+  PASSWORD_RESET_PATH: Joi.string().default('/auth/reset-password'),
+
   /** Optional until messaging milestones (SendGrid). */
   SENDGRID_API_KEY: Joi.string().allow('').optional(),
   EMAIL_FROM: Joi.string().allow('').optional(),
