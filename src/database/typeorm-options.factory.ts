@@ -16,11 +16,13 @@ export const createTypeOrmOptions = (
   password: db.password,
   database: db.name,
   schema: db.schema,
-  ssl: db.ssl ? { rejectUnauthorized: false } : false,
+  ssl: db.ssl,
   synchronize: db.synchronize,
   logging: db.logging,
   autoLoadEntities: true, // Automatically registers all entities so you don't have to specify them manually in the options.
   migrationsRun: false, // If true, runs pending migrations automatically when the application starts. Set to false here for explicit migration control.
+  retryAttempts: process.env.NODE_ENV === 'test' ? 2 : 10,
+  retryDelay: process.env.NODE_ENV === 'test' ? 500 : 3000,
 
   // The following option specifies the location of migration files for database schema changes.
   // These migration files allow you to version, update, and maintain your database schema in a controlled manner.

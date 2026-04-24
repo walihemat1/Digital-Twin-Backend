@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from './../src/app.module';
+import { configureApp } from '../src/bootstrap/configure-app';
 
 describe('Health (e2e)', () => {
   let app: INestApplication;
@@ -12,6 +13,7 @@ describe('Health (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    configureApp(app);
     await app.init();
   });
 
@@ -25,9 +27,12 @@ describe('Health (e2e)', () => {
       service: expect.any(String),
       timestamp: expect.any(String),
     });
+    expect(response.headers['x-request-id']).toBeDefined();
   });
 
   afterEach(async () => {
-    await app.close();
+    if (app) {
+      await app.close();
+    }
   });
 });
