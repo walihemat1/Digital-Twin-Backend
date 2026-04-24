@@ -1,6 +1,13 @@
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class RegistrationContactStepDto {
+  @IsNotEmpty()
   @IsString()
   @MinLength(2)
   @MaxLength(8)
@@ -9,6 +16,7 @@ export class RegistrationContactStepDto {
   })
   whatsappCountryCode!: string;
 
+  @IsNotEmpty()
   @IsString()
   @MinLength(4)
   @MaxLength(32)

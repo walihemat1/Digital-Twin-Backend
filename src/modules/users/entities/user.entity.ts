@@ -7,7 +7,10 @@ import { UserProfile } from './user-profile.entity';
 @Entity('users')
 @Index('IDX_users_role', ['role'])
 @Index('IDX_users_account_status', ['accountStatus'])
-@Index('UQ_users_email_lower', { unique: true, expression: 'LOWER("email")' })
+@Index('UQ_users_email_lower', {
+  unique: true,
+  expression: 'LOWER("email")',
+} as any)
 export class User extends BaseEntity {
   @Column({
     type: 'enum',
