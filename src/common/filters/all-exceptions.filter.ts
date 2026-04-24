@@ -66,17 +66,27 @@ export class AllExceptionsFilter implements ExceptionFilter {
         return;
       }
 
+      const driverError = exception.driverError as
+        | {
+            code?: string;
+            constraint?: string;
+            table?: string;
+            schema?: string;
+          }
+        | undefined;
+
       this.logger.error(
-        `Database query failed${dbCode ? ` (${dbCode})` : ''}: ${exception.message}`,
+        `Database query failed${dbCode ? ` (${dbCode})` : ''}`,
         exception.stack,
       );
-      try {
-        this.logger.error(
-          `Driver error payload: ${JSON.stringify(exception.driverError)}`,
-        );
-      } catch {
-        this.logger.error('Driver error payload could not be serialized.');
-      }
+      this.logger.warn(
+        `Driver metadata: ${JSON.stringify({
+          code: driverError?.code,
+          constraint: driverError?.constraint,
+          table: driverError?.table,
+          schema: driverError?.schema,
+        })}`,
+      );
 
       response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
         success: false,
@@ -104,7 +114,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     } satisfies ApiFailureResponse);
   }
 
-  private getQueryFailedDriverCode(exception: QueryFailedError): string | undefined {
+  private getQueryFailedDriverCode(
+    exception: QueryFailedError,
+  ): string | undefined {
     const driver = exception.driverError as { code?: string } | undefined;
     if (driver && typeof driver.code === 'string') {
       return driver.code;
@@ -145,7 +157,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const rawMessage = obj.message;
 
-    if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
+    if (
+      rawMessage &&
+      typeof rawMessage === 'object' &&
+      !Array.isArray(rawMessage)
+    ) {
       const m = rawMessage as Record<string, unknown>;
       if (typeof m.code === 'string' && typeof m.message === 'string') {
         return {
@@ -168,7 +184,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
     }
 
-    const statusLookup = HttpStatus as unknown as Record<number, string | undefined>;
+    const statusLookup = HttpStatus as unknown as Record<
+      number,
+      string | undefined
+    >;
     const statusKey = statusLookup[status];
     return {
       code: ApiErrorCode.HTTP_EXCEPTION,
