@@ -22,7 +22,9 @@ export class CreateUsersTable1745241000000 implements MigrationInterface {
         CONSTRAINT "PK_users" PRIMARY KEY ("id")
       )
     `);
-    await queryRunner.query(`CREATE INDEX "IDX_users_role" ON "users" ("role")`);
+    await queryRunner.query(
+      `CREATE INDEX "IDX_users_role" ON "users" ("role")`,
+    );
     await queryRunner.query(
       `CREATE INDEX "IDX_users_account_status" ON "users" ("account_status")`,
     );

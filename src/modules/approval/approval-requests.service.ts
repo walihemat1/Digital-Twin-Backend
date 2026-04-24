@@ -110,14 +110,18 @@ export class ApprovalRequestsService {
     };
 
     request.status = ApprovalRequestStatus.APPROVED;
+
     request.reviewedByUserId = adminUserId;
     request.reviewedAt = new Date();
+
     request.rejectionReason = null;
 
     request.user.accountStatus = AccountStatus.ACTIVE;
 
-    await this.approvalRequests.save(request);
-    await this.users.save(request.user);
+    await this.approvalRequests.manager.transaction(async (manager) => {
+      await manager.save(request);
+      await manager.save(request.user);
+    });
 
     await this.audit.append({
       actorUserId: adminUserId,

@@ -1,13 +1,25 @@
-import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  MaxLength,
+  MinLength,
+  Matches,
+} from 'class-validator';
 
 export class RegistrationPersonalInfoStepDto {
   @IsString()
   @MinLength(1)
+  @Matches(/\S/, {
+    message: 'firstName must contain non-whitespace characters',
+  })
   @MaxLength(120)
   firstName!: string;
 
   @IsString()
   @MinLength(1)
+  @Matches(/\S/, {
+    message: 'lastName must contain non-whitespace characters',
+  })
   @MaxLength(120)
   lastName!: string;
 
