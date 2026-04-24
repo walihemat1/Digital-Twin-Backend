@@ -4,9 +4,7 @@ const defaultAccessSecret = 'change-this-access-secret';
 const defaultRefreshSecret = 'change-this-refresh-secret';
 
 export const envValidationSchema = Joi.object({
-  NODE_ENV: Joi.string()
-    .valid('development', 'test', 'production')
-    .default('development'),
+  NODE_ENV: Joi.string().valid('development', 'test', 'production').required(),
   PORT: Joi.number().port().default(3000),
   API_PREFIX: Joi.string().default('api'),
   SERVICE_NAME: Joi.string().default('digital-twin-backend'),

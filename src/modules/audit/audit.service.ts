@@ -21,6 +21,26 @@ export class AuditService {
     private readonly auditLogs: Repository<AuditLog>,
   ) {}
 
+  private static readonly REDACT_KEYS = new Set([
+    'password',
+    'passwordHash',
+    'otp',
+    'token',
+    'accessToken',
+    'refreshToken',
+  ]);
+
+  private sanitize(
+    values?: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    if (!values) return null;
+    const out: Record<string, unknown> = { ...values };
+    for (const key of Object.keys(out)) {
+      if (AuditService.REDACT_KEYS.has(key)) out[key] = '[REDACTED]';
+    }
+    return out;
+  }
+
   async append(input: AuditAppendInput): Promise<void> {
     await this.auditLogs.save(
       this.auditLogs.create({
@@ -29,9 +49,9 @@ export class AuditService {
         entityType: input.entityType,
         entityId: input.entityId,
         actionType: input.actionType,
-        oldValues: input.oldValues ?? null,
-        newValues: input.newValues ?? null,
-        metadata: input.metadata ?? null,
+        oldValues: this.sanitize(input.oldValues),
+        newValues: this.sanitize(input.newValues),
+        metadata: this.sanitize(input.metadata),
       }),
     );
   }
@@ -49,9 +69,9 @@ export class AuditService {
         entityType: input.entityType,
         entityId: input.entityId,
         actionType: input.actionType,
-        oldValues: input.oldValues ?? null,
-        newValues: input.newValues ?? null,
-        metadata: input.metadata ?? null,
+        oldValues: this.sanitize(input.oldValues),
+        newValues: this.sanitize(input.newValues),
+        metadata: this.sanitize(input.metadata),
       }),
     );
   }
