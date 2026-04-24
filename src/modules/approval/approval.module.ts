@@ -6,10 +6,7 @@ import { ApprovalRequestsService } from './approval-requests.service';
 import { ApprovalRequest } from './entities/approval-request.entity';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([ApprovalRequest, User]),
-    AuditModule,
-  ],
+  imports: [TypeOrmModule.forFeature([ApprovalRequest, User]), AuditModule],
   providers: [ApprovalRequestsService],
   exports: [ApprovalRequestsService],
 })

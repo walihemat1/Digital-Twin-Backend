@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class ConvertUsersRoleStatusToEnum1745243000000
-  implements MigrationInterface
-{
+export class ConvertUsersRoleStatusToEnum1745243000000 implements MigrationInterface {
   name = 'ConvertUsersRoleStatusToEnum1745243000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

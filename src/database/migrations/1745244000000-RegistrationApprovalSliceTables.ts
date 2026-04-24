@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class RegistrationApprovalSliceTables1745244000000
-  implements MigrationInterface
-{
+export class RegistrationApprovalSliceTables1745244000000 implements MigrationInterface {
   name = 'RegistrationApprovalSliceTables1745244000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -11,7 +11,7 @@ export default new DataSource({
   port: Number(process.env.DB_PORT ?? 5432),
   username: process.env.DB_USERNAME ?? 'postgres',
   password: process.env.DB_PASSWORD ?? 'postgres',
-  name: process.env.DB_NAME ?? 'digital_twin',
+  database: process.env.DB_NAME ?? 'digital_twin',
   schema: process.env.DB_SCHEMA ?? 'public',
   ssl: isSslEnabled ? { rejectUnauthorized: false } : false,
   synchronize: isSynchronizeEnabled,

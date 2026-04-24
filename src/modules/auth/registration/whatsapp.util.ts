@@ -8,6 +8,17 @@ export function buildNormalizedWhatsappNumber(
 ): string {
   const cc = whatsappCountryCode.trim();
   const digitsCc = cc.replace(/\D/g, '');
-  const digitsLocal = whatsappNumber.replace(/\D/g, '');
-  return `+${digitsCc}${digitsLocal}`;
+
+  const digitsLocal = whatsappNumber.trim().replace(/\D/g, '');
+  const normalizedDigits = `${digitsCc}${digitsLocal}`;
+
+  if (!digitsCc || !digitsLocal) {
+    throw new Error('Invalid WhatsApp number: missing country/local digits.');
+  }
+
+  if (normalizedDigits.length > 15) {
+    throw new Error('Invalid WhatsApp number: exceeds E.164 max length.');
+  }
+
+  return `+${normalizedDigits}`;
 }

@@ -24,16 +24,16 @@ export class User extends BaseEntity {
   })
   accountStatus!: AccountStatus;
 
-  @Column({ name: 'first_name' })
+  @Column({ name: 'first_name', type: 'varchar', length: 255 })
   firstName!: string;
 
-  @Column({ name: 'last_name' })
+  @Column({ name: 'last_name', type: 'varchar', length: 255 })
   lastName!: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, type: 'varchar', length: 320 })
   email!: string;
 
-  @Column({ name: 'password_hash' })
+  @Column({ name: 'password_hash', type: 'varchar', length: 255 })
   passwordHash!: string;
 
   @Column({ name: 'password_policy_version', type: 'varchar', nullable: true })

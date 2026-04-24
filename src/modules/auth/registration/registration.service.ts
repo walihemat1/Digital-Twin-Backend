@@ -86,7 +86,10 @@ export class RegistrationService {
     return this.sessions.save(session);
   }
 
-  async selectRole(id: string, dto: SelectRoleDto): Promise<RegistrationSession> {
+  async selectRole(
+    id: string,
+    dto: SelectRoleDto,
+  ): Promise<RegistrationSession> {
     const session = await this.requireOpenSession(id);
 
     if (session.currentStep !== RegistrationStep.AWAITING_ROLE) {
@@ -220,22 +223,15 @@ export class RegistrationService {
       throw new BadRequestException('Registration is not ready to complete.');
     }
 
-    const contact = session.contactPayload as unknown as ContactPayloadV1 | null;
-    const personal = session.personalInfoPayload as unknown as
-      | PersonalInfoPayloadV1
-      | null;
-    const location = session.locationPayload as unknown as
-      | LocationPayloadV1
-      | null;
+    const contact =
+      session.contactPayload as unknown as ContactPayloadV1 | null;
+    const personal =
+      session.personalInfoPayload as unknown as PersonalInfoPayloadV1 | null;
+    const location =
+      session.locationPayload as unknown as LocationPayloadV1 | null;
 
     if (!session.selectedRole || !contact || !personal || !location) {
       throw new BadRequestException('Registration data is incomplete.');
-    }
-
-    const email = personal.email;
-    const existing = await this.users.exist({ where: { email } });
-    if (existing) {
-      throw new ConflictException('Email is already registered.');
     }
 
     const accountStatus =
@@ -248,6 +244,12 @@ export class RegistrationService {
       const profiles = manager.getRepository(UserProfile);
       const approvals = manager.getRepository(ApprovalRequest);
       const registrationSessions = manager.getRepository(RegistrationSession);
+
+      const email = personal.email;
+      const existing = await this.users.exist({ where: { email } });
+      if (existing) {
+        throw new ConflictException('Email is already registered.');
+      }
 
       const user = users.create({
         role: session.selectedRole!,
@@ -301,9 +303,7 @@ export class RegistrationService {
     return { userId };
   }
 
-  private async requireOpenSession(
-    id: string,
-  ): Promise<RegistrationSession> {
+  private async requireOpenSession(id: string): Promise<RegistrationSession> {
     const session = await this.sessions.findOne({ where: { id } });
     if (!session) {
       throw new NotFoundException('Registration session not found.');
