@@ -12,4 +12,16 @@ export default registerAs('auth', () => ({
     process.env.JWT_REFRESH_TOKEN_SECRET ?? 'change-this-refresh-secret',
   refreshTokenExpiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN ?? '7d',
   bcryptSaltRounds: Number(process.env.BCRYPT_SALT_ROUNDS ?? 12),
+  /** Env validation enforces a strong value in production. */
+  opaqueTokenPepper:
+    process.env.AUTH_OPAQUE_TOKEN_PEPPER ?? 'dev-opaque-token-pepper',
+  mfaCodeTtlSeconds: Number(process.env.MFA_CODE_TTL_SECONDS ?? 600),
+  passwordResetTtlSeconds: Number(
+    process.env.PASSWORD_RESET_TTL_SECONDS ?? 3600,
+  ),
+  frontendAppBaseUrl:
+    process.env.FRONTEND_APP_BASE_URL ?? 'http://localhost:3001',
+  passwordResetPath: process.env.PASSWORD_RESET_PATH ?? '/auth/reset-password',
+  sendgridApiKey: process.env.SENDGRID_API_KEY ?? '',
+  emailFrom: process.env.EMAIL_FROM ?? '',
 }));
