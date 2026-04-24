@@ -20,7 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   validate(payload: JwtPayload): AuthenticatedUser {
-    if (payload.tokenType !== 'access') {
+    if (payload.tokenType && payload.tokenType !== 'access') {
       throw new UnauthorizedException('A bearer access token is required.');
     }
     return {

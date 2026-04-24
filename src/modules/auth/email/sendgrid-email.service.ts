@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
+import type { ConfigType } from '@nestjs/config';
 import * as sendgrid from '@sendgrid/mail';
 import authConfig from '../../../config/auth.config';
 

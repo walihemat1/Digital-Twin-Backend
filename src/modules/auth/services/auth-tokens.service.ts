@@ -1,6 +1,6 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigType } from '@nestjs/config';
+import type { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
@@ -23,10 +23,6 @@ export class AuthTokensService {
     @Inject(authConfig.KEY)
     private readonly auth: ConfigType<typeof authConfig>,
   ) {}
-
-  private accessTokenTtlString(): string {
-    return this.auth.accessTokenExpiresIn;
-  }
 
   private refreshExpiresAt(): Date {
     const s = this.parseDurationToSeconds(this.auth.refreshTokenExpiresIn);
@@ -63,7 +59,9 @@ export class AuthTokensService {
     return this.jwt.sign(payload, {
       secret: this.auth.accessTokenSecret,
       expiresIn: this.auth.accessTokenExpiresIn,
-    } as { expiresIn: string });
+      // String TTL from env; satisfies jsonwebtoken SignOptions when typed strictly.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
   }
 
   async buildTokenPair(user: User): Promise<TokenPairDto> {
@@ -100,6 +98,13 @@ export class AuthTokensService {
     });
     if (!user) {
       throw new UnauthorizedException('User no longer exists.');
+    }
+    if (user.accountStatus !== AccountStatus.ACTIVE) {
+      row.revokedAt = now;
+      await this.refresh.save(row);
+      throw new UnauthorizedException(
+        'Session is no longer valid for this account.',
+      );
     }
     row.revokedAt = now;
     await this.refresh.save(row);
