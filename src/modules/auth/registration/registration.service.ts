@@ -72,6 +72,7 @@ export class RegistrationService {
     private readonly auth: ConfigType<typeof authConfig>,
   ) {}
 
+  // create a new registration session
   async createSession(): Promise<RegistrationSession> {
     const now = new Date();
     const session = this.sessions.create({
@@ -86,6 +87,7 @@ export class RegistrationService {
     return this.sessions.save(session);
   }
 
+  // select a role for the registration session
   async selectRole(
     id: string,
     dto: SelectRoleDto,

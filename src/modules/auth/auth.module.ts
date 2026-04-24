@@ -5,9 +5,18 @@ import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import authConfig from '../../config/auth.config';
 import { UsersModule } from '../users/users.module';
+import { AuthSessionController } from './controllers/auth-session.controller';
 import { RegistrationController } from './controllers/registration.controller';
+import { MfaChallenge } from './entities/mfa-challenge.entity';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
 import { RegistrationSession } from './entities/registration-session.entity';
+import { SendgridEmailService } from './email/sendgrid-email.service';
 import { RegistrationService } from './registration/registration.service';
+import { AuthLoginService } from './services/auth-login.service';
+import { AuthTokensService } from './services/auth-tokens.service';
+import { MfaChallengeService } from './services/mfa-challenge.service';
+import { PasswordRecoveryService } from './services/password-recovery.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from '../users/entities/user.entity';
 
@@ -25,10 +34,24 @@ import { User } from '../users/entities/user.entity';
         }) as JwtModuleOptions,
     }),
     UsersModule,
-    TypeOrmModule.forFeature([RegistrationSession, User]),
+    TypeOrmModule.forFeature([
+      RegistrationSession,
+      User,
+      MfaChallenge,
+      PasswordResetToken,
+      RefreshToken,
+    ]),
   ],
-  controllers: [RegistrationController],
-  providers: [JwtStrategy, RegistrationService],
-  exports: [PassportModule, JwtModule],
+  controllers: [RegistrationController, AuthSessionController],
+  providers: [
+    JwtStrategy,
+    RegistrationService,
+    SendgridEmailService,
+    AuthLoginService,
+    MfaChallengeService,
+    AuthTokensService,
+    PasswordRecoveryService,
+  ],
+  exports: [PassportModule, JwtModule, AuthTokensService, SendgridEmailService],
 })
 export class AuthModule {}

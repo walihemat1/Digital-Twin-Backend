@@ -4,6 +4,7 @@ import {
   MaxLength,
   MinLength,
   Matches,
+  IsNotEmpty,
 } from 'class-validator';
 
 export class RegistrationPersonalInfoStepDto {
@@ -23,17 +24,26 @@ export class RegistrationPersonalInfoStepDto {
   @MaxLength(120)
   lastName!: string;
 
-  @IsEmail()
-  @MaxLength(320)
+  @IsNotEmpty()
+  @IsEmail({}, { message: 'Invalid email address.' })
+  @MaxLength(320, { message: 'Email must be less than 320 characters long.' })
   email!: string;
 
+  @IsNotEmpty()
   @IsString()
-  @MinLength(12)
-  @MaxLength(128)
+  @MinLength(12, { message: 'Password must be at least 12 characters long.' })
+  @MaxLength(128, {
+    message: 'Password must be less than 128 characters long.',
+  })
   password!: string;
 
+  @IsNotEmpty()
   @IsString()
-  @MinLength(12)
-  @MaxLength(128)
+  @MinLength(12, {
+    message: 'Password confirmation must be at least 12 characters long.',
+  })
+  @MaxLength(128, {
+    message: 'Password confirmation must be less than 128 characters long.',
+  })
   passwordConfirm!: string;
 }
