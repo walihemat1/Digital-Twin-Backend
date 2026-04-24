@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { AuditLog } from './entities/audit-log.entity';
 
 export type AuditAppendInput = {
@@ -24,6 +24,26 @@ export class AuditService {
   async append(input: AuditAppendInput): Promise<void> {
     await this.auditLogs.save(
       this.auditLogs.create({
+        actorUserId: input.actorUserId,
+        actorType: input.actorType,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        actionType: input.actionType,
+        oldValues: input.oldValues ?? null,
+        newValues: input.newValues ?? null,
+        metadata: input.metadata ?? null,
+      }),
+    );
+  }
+
+  /** Persists an audit row using the given transactional EntityManager. */
+  async appendWithManager(
+    manager: EntityManager,
+    input: AuditAppendInput,
+  ): Promise<void> {
+    const repo = manager.getRepository(AuditLog);
+    await repo.save(
+      repo.create({
         actorUserId: input.actorUserId,
         actorType: input.actorType,
         entityType: input.entityType,

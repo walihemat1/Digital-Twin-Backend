@@ -1,19 +1,39 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddUsersEmailCaseInsensitiveIndex1745242000000 implements MigrationInterface {
+export class AddUsersEmailCaseInsensitiveIndex1745242000000
+  implements MigrationInterface
+{
   name = 'AddUsersEmailCaseInsensitiveIndex1745242000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const duplicates = await queryRunner.query(`
-      SELECT LOWER(email) AS normalized_email, ARRAY_AGG(email) AS original_emails
-      FROM "users"
-      GROUP BY LOWER(email)
-      HAVING COUNT(*) > 1
-    `);
+    const [summary] = (await queryRunner.query(`
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM (
+            SELECT LOWER("email") AS le
+            FROM "users"
+            GROUP BY le
+            HAVING COUNT(*) > 1
+          ) g
+        ) AS "duplicateGroups",
+        (
+          SELECT COALESCE(SUM(cnt), 0)::int
+          FROM (
+            SELECT COUNT(*)::int AS cnt
+            FROM "users"
+            GROUP BY LOWER("email")
+            HAVING COUNT(*) > 1
+          ) s
+        ) AS "affectedRows"
+    `)) as Array<{ duplicateGroups: number; affectedRows: number }>;
 
-    if (duplicates.length > 0) {
+    const duplicateGroups = Number(summary?.duplicateGroups ?? 0);
+    const affectedRows = Number(summary?.affectedRows ?? 0);
+
+    if (duplicateGroups > 0) {
       throw new Error(
-        `Cannot lowercase existing user emails because case-insensitive duplicates exist: ${JSON.stringify(duplicates)}`,
+        `Cannot lowercase existing user emails: ${duplicateGroups} case-insensitive duplicate email group(s) involving ${affectedRows} row(s). Resolve duplicates before re-running this migration. (PII omitted from logs.)`,
       );
     }
 

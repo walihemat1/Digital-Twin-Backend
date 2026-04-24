@@ -9,6 +9,7 @@ import { RegistrationController } from './controllers/registration.controller';
 import { RegistrationSession } from './entities/registration-session.entity';
 import { RegistrationService } from './registration/registration.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { User } from '../users/entities/user.entity';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
         }) as JwtModuleOptions,
     }),
     UsersModule,
-    TypeOrmModule.forFeature([RegistrationSession]),
+    TypeOrmModule.forFeature([RegistrationSession, User]),
   ],
   controllers: [RegistrationController],
   providers: [JwtStrategy, RegistrationService],
