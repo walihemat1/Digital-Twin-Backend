@@ -16,7 +16,7 @@ export const createTypeOrmOptions = (
   password: db.password,
   database: db.name,
   schema: db.schema,
-  ssl: db.ssl ? { rejectUnauthorized: false } : false,
+  ssl: db.ssl,
   synchronize: db.synchronize,
   logging: db.logging,
   autoLoadEntities: true, // Automatically registers all entities so you don't have to specify them manually in the options.

@@ -30,7 +30,7 @@ export class User extends BaseEntity {
   @Column({ name: 'last_name', type: 'varchar', length: 255 })
   lastName!: string;
 
-  @Column({ unique: true, type: 'varchar', length: 320 })
+  @Column({ type: 'varchar', length: 320 })
   email!: string;
 
   @Column({ name: 'password_hash', type: 'varchar', length: 255 })

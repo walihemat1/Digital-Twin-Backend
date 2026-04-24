@@ -27,7 +27,8 @@ export const envValidationSchema = Joi.object({
       .min(32)
       .invalid(defaultAccessSecret)
       .messages({
-        'any.invalid': 'JWT_ACCESS_TOKEN_SECRET must not use the default placeholder in production.',
+        'any.invalid':
+          'JWT_ACCESS_TOKEN_SECRET must not use the default placeholder in production.',
       })
       .required(),
     otherwise: Joi.string().min(16).default(defaultAccessSecret),
@@ -39,7 +40,8 @@ export const envValidationSchema = Joi.object({
       .min(32)
       .invalid(defaultRefreshSecret)
       .messages({
-        'any.invalid': 'JWT_REFRESH_TOKEN_SECRET must not use the default placeholder in production.',
+        'any.invalid':
+          'JWT_REFRESH_TOKEN_SECRET must not use the default placeholder in production.',
       })
       .required(),
     otherwise: Joi.string().min(16).default(defaultRefreshSecret),

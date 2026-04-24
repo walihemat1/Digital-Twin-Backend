@@ -40,8 +40,6 @@ export class ApprovalRequestsService {
   constructor(
     @InjectRepository(ApprovalRequest)
     private readonly approvalRequests: Repository<ApprovalRequest>,
-    @InjectRepository(User)
-    private readonly users: Repository<User>,
     private readonly audit: AuditService,
   ) {}
 
@@ -82,61 +80,64 @@ export class ApprovalRequestsService {
   }
 
   async approve(requestId: string, adminUserId: string): Promise<void> {
-    const request = await this.approvalRequests.findOne({
-      where: { id: requestId },
-      relations: { user: true },
-    });
-
-    if (!request) {
-      throw new NotFoundException('Approval request not found.');
-    }
-
-    if (request.status !== ApprovalRequestStatus.PENDING) {
-      throw new ConflictException('Approval request is not pending.');
-    }
-
-    if (request.user.accountStatus !== AccountStatus.PENDING_APPROVAL) {
-      throw new ConflictException('User is not awaiting approval.');
-    }
-
-    if (request.user.role !== UserRole.COORDINATOR_SENDER) {
-      throw new ConflictException('User role does not require this approval.');
-    }
-
-    const prevApproval = {
-      status: request.status,
-      reviewedByUserId: request.reviewedByUserId,
-      reviewedAt: request.reviewedAt,
-    };
-
-    request.status = ApprovalRequestStatus.APPROVED;
-
-    request.reviewedByUserId = adminUserId;
-    request.reviewedAt = new Date();
-
-    request.rejectionReason = null;
-
-    request.user.accountStatus = AccountStatus.ACTIVE;
-
     await this.approvalRequests.manager.transaction(async (manager) => {
-      await manager.save(request);
-      await manager.save(request.user);
-    });
+      const approvalRepo = manager.getRepository(ApprovalRequest);
+      const userRepo = manager.getRepository(User);
 
-    await this.audit.append({
-      actorUserId: adminUserId,
-      actorType: ACTOR_TYPE_ADMIN_USER,
-      entityType: ENTITY_TYPE_APPROVAL_REQUEST,
-      entityId: request.id,
-      actionType: 'approval_request.approved',
-      oldValues: prevApproval,
-      newValues: {
+      const request = await approvalRepo.findOne({
+        where: { id: requestId },
+        relations: { user: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!request) {
+        throw new NotFoundException('Approval request not found.');
+      }
+
+      if (request.status !== ApprovalRequestStatus.PENDING) {
+        throw new ConflictException('Approval request is not pending.');
+      }
+
+      if (request.user.accountStatus !== AccountStatus.PENDING_APPROVAL) {
+        throw new ConflictException('User is not awaiting approval.');
+      }
+
+      if (request.user.role !== UserRole.COORDINATOR_SENDER) {
+        throw new ConflictException(
+          'User role does not require this approval.',
+        );
+      }
+
+      const prevApproval = {
         status: request.status,
         reviewedByUserId: request.reviewedByUserId,
         reviewedAt: request.reviewedAt,
-        userAccountStatus: request.user.accountStatus,
-      },
-      metadata: { subjectUserId: request.userId },
+      };
+
+      request.status = ApprovalRequestStatus.APPROVED;
+      request.reviewedByUserId = adminUserId;
+      request.reviewedAt = new Date();
+      request.rejectionReason = null;
+      request.user.accountStatus = AccountStatus.ACTIVE;
+
+      await approvalRepo.save(request);
+      await userRepo.save(request.user);
+
+      await this.audit.appendWithManager(manager, {
+        actorUserId: adminUserId,
+        actorType: ACTOR_TYPE_ADMIN_USER,
+        entityType: ENTITY_TYPE_APPROVAL_REQUEST,
+        entityId: request.id,
+        actionType: 'approval_request.approved',
+        oldValues: prevApproval,
+        newValues: {
+          status: request.status,
+          reviewedByUserId: request.reviewedByUserId,
+          reviewedAt: request.reviewedAt,
+          userAccountStatus: request.user.accountStatus,
+        },
+        metadata: { subjectUserId: request.userId },
+      });
     });
   }
 
@@ -150,55 +151,60 @@ export class ApprovalRequestsService {
       throw new BadRequestException('rejectionReason is required.');
     }
 
-    const request = await this.approvalRequests.findOne({
-      where: { id: requestId },
-      relations: { user: true },
-    });
+    await this.approvalRequests.manager.transaction(async (manager) => {
+      const approvalRepo = manager.getRepository(ApprovalRequest);
+      const userRepo = manager.getRepository(User);
 
-    if (!request) {
-      throw new NotFoundException('Approval request not found.');
-    }
+      const request = await approvalRepo.findOne({
+        where: { id: requestId },
+        relations: { user: true },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    if (request.status !== ApprovalRequestStatus.PENDING) {
-      throw new ConflictException('Approval request is not pending.');
-    }
+      if (!request) {
+        throw new NotFoundException('Approval request not found.');
+      }
 
-    if (request.user.accountStatus !== AccountStatus.PENDING_APPROVAL) {
-      throw new ConflictException('User is not awaiting approval.');
-    }
+      if (request.status !== ApprovalRequestStatus.PENDING) {
+        throw new ConflictException('Approval request is not pending.');
+      }
 
-    const prevApproval = {
-      status: request.status,
-      reviewedByUserId: request.reviewedByUserId,
-      reviewedAt: request.reviewedAt,
-      rejectionReason: request.rejectionReason,
-    };
+      if (request.user.accountStatus !== AccountStatus.PENDING_APPROVAL) {
+        throw new ConflictException('User is not awaiting approval.');
+      }
 
-    request.status = ApprovalRequestStatus.REJECTED;
-    request.reviewedByUserId = adminUserId;
-    request.reviewedAt = new Date();
-    request.rejectionReason = trimmed;
-
-    request.user.accountStatus = AccountStatus.REJECTED;
-
-    await this.approvalRequests.save(request);
-    await this.users.save(request.user);
-
-    await this.audit.append({
-      actorUserId: adminUserId,
-      actorType: ACTOR_TYPE_ADMIN_USER,
-      entityType: ENTITY_TYPE_APPROVAL_REQUEST,
-      entityId: request.id,
-      actionType: 'approval_request.rejected',
-      oldValues: prevApproval,
-      newValues: {
+      const prevApproval = {
         status: request.status,
         reviewedByUserId: request.reviewedByUserId,
         reviewedAt: request.reviewedAt,
         rejectionReason: request.rejectionReason,
-        userAccountStatus: request.user.accountStatus,
-      },
-      metadata: { subjectUserId: request.userId },
+      };
+
+      request.status = ApprovalRequestStatus.REJECTED;
+      request.reviewedByUserId = adminUserId;
+      request.reviewedAt = new Date();
+      request.rejectionReason = trimmed;
+      request.user.accountStatus = AccountStatus.REJECTED;
+
+      await approvalRepo.save(request);
+      await userRepo.save(request.user);
+
+      await this.audit.appendWithManager(manager, {
+        actorUserId: adminUserId,
+        actorType: ACTOR_TYPE_ADMIN_USER,
+        entityType: ENTITY_TYPE_APPROVAL_REQUEST,
+        entityId: request.id,
+        actionType: 'approval_request.rejected',
+        oldValues: prevApproval,
+        newValues: {
+          status: request.status,
+          reviewedByUserId: request.reviewedByUserId,
+          reviewedAt: request.reviewedAt,
+          rejectionReason: request.rejectionReason,
+          userAccountStatus: request.user.accountStatus,
+        },
+        metadata: { subjectUserId: request.userId },
+      });
     });
   }
 }

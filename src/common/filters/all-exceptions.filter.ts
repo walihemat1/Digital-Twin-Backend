@@ -15,6 +15,16 @@ import type { ApiFailureResponse } from '../interfaces/api-error-response.interf
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
+  /**
+   * PostgreSQL error codes that indicate a client-visible constraint conflict
+   * (safe to surface as 409). See https://www.postgresql.org/docs/current/errcodes-appendix.html
+   */
+  private static readonly PG_CONSTRAINT_CONFLICT_CODES = new Set<string>([
+    '23505', // unique_violation
+    '23503', // foreign_key_violation
+    '23514', // check_violation
+  ]);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -35,19 +45,47 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (exception instanceof QueryFailedError) {
-      this.logger.warn(
-        `Database error: ${exception.message}`,
+      const dbCode = this.getQueryFailedDriverCode(exception);
+      if (
+        dbCode &&
+        AllExceptionsFilter.PG_CONSTRAINT_CONFLICT_CODES.has(dbCode)
+      ) {
+        this.logger.warn(
+          `Database constraint conflict (${dbCode}): ${exception.message}`,
+          exception.stack,
+        );
+        const body: ApiFailureResponse = {
+          success: false,
+          error: {
+            code: ApiErrorCode.DATABASE_CONFLICT,
+            message: 'A database constraint was violated.',
+          },
+          requestId,
+        };
+        response.status(HttpStatus.CONFLICT).json(body);
+        return;
+      }
+
+      this.logger.error(
+        `Database query failed${dbCode ? ` (${dbCode})` : ''}: ${exception.message}`,
         exception.stack,
       );
-      const body: ApiFailureResponse = {
+      try {
+        this.logger.error(
+          `Driver error payload: ${JSON.stringify(exception.driverError)}`,
+        );
+      } catch {
+        this.logger.error('Driver error payload could not be serialized.');
+      }
+
+      response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
         success: false,
         error: {
-          code: ApiErrorCode.DATABASE_CONFLICT,
-          message: 'A database constraint was violated.',
+          code: ApiErrorCode.INTERNAL_ERROR,
+          message: 'An unexpected error occurred.',
         },
         requestId,
-      };
-      response.status(HttpStatus.CONFLICT).json(body);
+      } satisfies ApiFailureResponse);
       return;
     }
 
@@ -64,6 +102,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       },
       requestId,
     } satisfies ApiFailureResponse);
+  }
+
+  private getQueryFailedDriverCode(exception: QueryFailedError): string | undefined {
+    const driver = exception.driverError as { code?: string } | undefined;
+    if (driver && typeof driver.code === 'string') {
+      return driver.code;
+    }
+    const root = exception as unknown as { code?: string };
+    return typeof root.code === 'string' ? root.code : undefined;
   }
 
   /**
