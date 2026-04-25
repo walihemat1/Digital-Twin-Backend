@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { CommonModule } from './common/common.module';
 import { configLoaders } from './config';
 import { envValidationSchema } from './config/env.validation';
@@ -44,5 +46,7 @@ import { UsersModule } from './modules/users/users.module';
     AdminModule,
     AuditModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}
