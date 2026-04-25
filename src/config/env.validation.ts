@@ -15,7 +15,26 @@ export const envValidationSchema = Joi.object({
   DB_PASSWORD: Joi.string().allow('').default('postgres'),
   DB_NAME: Joi.string().default('digital_twin'),
   DB_SCHEMA: Joi.string().default('public'),
-  DB_SSL: Joi.boolean().truthy('true').falsy('false').default(false),
+  DB_SSL: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.valid(true).messages({
+        'any.only': 'DB_SSL must be true in production for Neon connections.',
+      }),
+      otherwise: Joi.boolean().default(false),
+    }),
+  DB_SSL_REJECT_UNAUTHORIZED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  PGSSLMODE: Joi.string()
+    .valid('disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full')
+    .optional(),
+  DATABASE_URL: Joi.string()
+    .uri({ scheme: ['postgres', 'postgresql'] })
+    .optional(),
   DB_SYNCHRONIZE: Joi.boolean().truthy('true').falsy('false').default(false),
   DB_LOGGING: Joi.boolean().truthy('true').falsy('false').default(false),
 
