@@ -10,13 +10,19 @@ export const createTypeOrmOptions = (
   db: ConfigType<typeof databaseConfig>, // db is the configuration for the database.
 ): TypeOrmModuleOptions => ({
   type: 'postgres',
+  url: process.env.DATABASE_URL,
   host: db.host,
   port: db.port,
   username: db.username,
   password: db.password,
   database: db.name,
   schema: db.schema,
-  ssl: db.ssl,
+  ssl:
+    process.env.DATABASE_URL && db.ssl === false
+      ? { rejectUnauthorized: false }
+      : db.ssl
+        ? { rejectUnauthorized: (db.ssl as any).rejectUnauthorized ?? false }
+        : false,
   synchronize: db.synchronize,
   logging: db.logging,
   autoLoadEntities: true, // Automatically registers all entities so you don't have to specify them manually in the options.
