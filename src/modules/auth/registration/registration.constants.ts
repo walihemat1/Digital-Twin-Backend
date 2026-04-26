@@ -5,6 +5,7 @@ export const REGISTRATION_SELECTABLE_ROLES: readonly UserRole[] = [
   UserRole.COORDINATOR_SENDER,
   UserRole.BROKER_A,
   UserRole.BROKER_B,
+  UserRole.RECIPIENT,
 ] as const;
 
 export const REGISTRATION_REQUEST_TYPE_COORDINATOR_SENDER =
@@ -19,6 +20,7 @@ export const RegistrationStep = {
   AWAITING_CONTACT: 'awaiting_contact',
   AWAITING_PERSONAL_INFO: 'awaiting_personal_info',
   AWAITING_LOCATION: 'awaiting_location',
+  AWAITING_RECIPIENT_DETAILS: 'awaiting_recipient_details',
   READY_TO_COMPLETE: 'ready_to_complete',
 } as const;
 

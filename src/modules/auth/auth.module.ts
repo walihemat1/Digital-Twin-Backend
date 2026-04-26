@@ -19,6 +19,7 @@ import { MfaChallengeService } from './services/mfa-challenge.service';
 import { PasswordRecoveryService } from './services/password-recovery.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from '../users/entities/user.entity';
+import { UserProfile } from '../users/entities/user-profile.entity';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { User } from '../users/entities/user.entity';
     TypeOrmModule.forFeature([
       RegistrationSession,
       User,
+      UserProfile,
       MfaChallenge,
       PasswordResetToken,
       RefreshToken,

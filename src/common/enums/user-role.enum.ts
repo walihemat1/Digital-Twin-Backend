@@ -4,6 +4,8 @@ export enum UserRole {
   COORDINATOR_SENDER = 'coordinator_sender',
   BROKER_A = 'broker_a',
   BROKER_B = 'broker_b',
+  /** Public self-service recipient registration; no full in-app shell in V1. */
+  RECIPIENT = 'recipient',
   ADMIN = 'admin',
   ORGANIZATION = 'organization',
 }

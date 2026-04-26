@@ -21,6 +21,7 @@ import { UserProfile } from '../../users/entities/user-profile.entity';
 import { RegistrationContactStepDto } from '../dto/registration-contact-step.dto';
 import { RegistrationLocationStepDto } from '../dto/registration-location-step.dto';
 import { RegistrationPersonalInfoStepDto } from '../dto/registration-personal-info-step.dto';
+import { RegistrationRecipientDetailsStepDto } from '../dto/registration-recipient-details-step.dto';
 import { SelectRoleDto } from '../dto/select-role.dto';
 import { RegistrationSession } from '../entities/registration-session.entity';
 import {
@@ -60,6 +61,11 @@ type LocationPayloadV1 = {
   phoneNumber: string;
 };
 
+type RecipientDetailsPayloadV1 = {
+  issuingCountry: string;
+  identificationNumber: string;
+};
+
 @Injectable()
 export class RegistrationService {
   constructor(
@@ -67,6 +73,8 @@ export class RegistrationService {
     private readonly sessions: Repository<RegistrationSession>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    @InjectRepository(UserProfile)
+    private readonly profiles: Repository<UserProfile>,
     private readonly dataSource: DataSource,
     @Inject(authConfig.KEY)
     private readonly auth: ConfigType<typeof authConfig>,
@@ -213,12 +221,57 @@ export class RegistrationService {
     };
 
     session.locationPayload = payload as unknown as Record<string, unknown>;
-    session.currentStep = RegistrationStep.READY_TO_COMPLETE;
+    session.currentStep =
+      session.selectedRole === UserRole.RECIPIENT
+        ? RegistrationStep.AWAITING_RECIPIENT_DETAILS
+        : RegistrationStep.READY_TO_COMPLETE;
 
     return this.sessions.save(session);
   }
 
-  async completeRegistration(id: string): Promise<{ userId: string }> {
+  async saveRecipientDetailsStep(
+    id: string,
+    dto: RegistrationRecipientDetailsStepDto,
+  ): Promise<RegistrationSession> {
+    const session = await this.requireOpenSession(id);
+
+    if (session.currentStep !== RegistrationStep.AWAITING_RECIPIENT_DETAILS) {
+      throw new BadRequestException(
+        'Recipient identification step is not available yet.',
+      );
+    }
+    if (session.selectedRole !== UserRole.RECIPIENT) {
+      throw new BadRequestException('This step is only for recipient registration.');
+    }
+
+    const issuingCountry = dto.issuingCountry.trim();
+    const identificationNumber = dto.identificationNumber.trim();
+
+    const duplicate = await this.profiles
+      .createQueryBuilder('p')
+      .innerJoin('p.user', 'u')
+      .where('u.role = :r', { r: UserRole.RECIPIENT })
+      .andWhere('p.issuingCountry = :c', { c: issuingCountry })
+      .andWhere('p.identificationNumber = :n', { n: identificationNumber })
+      .getExists();
+    if (duplicate) {
+      throw new ConflictException(
+        'This identification number is already registered for the selected country.',
+      );
+    }
+
+    const rec: RecipientDetailsPayloadV1 = {
+      issuingCountry,
+      identificationNumber,
+    };
+    session.recipientDetailsPayload = rec as unknown as Record<string, unknown>;
+    session.currentStep = RegistrationStep.READY_TO_COMPLETE;
+    return this.sessions.save(session);
+  }
+
+  async completeRegistration(
+    id: string,
+  ): Promise<{ userId: string; accountStatus: AccountStatus }> {
     const session = await this.requireOpenSession(id);
 
     if (session.currentStep !== RegistrationStep.READY_TO_COMPLETE) {
@@ -231,8 +284,13 @@ export class RegistrationService {
       session.personalInfoPayload as unknown as PersonalInfoPayloadV1 | null;
     const location =
       session.locationPayload as unknown as LocationPayloadV1 | null;
+    const recipient =
+      session.recipientDetailsPayload as unknown as RecipientDetailsPayloadV1 | null;
 
     if (!session.selectedRole || !contact || !personal || !location) {
+      throw new BadRequestException('Registration data is incomplete.');
+    }
+    if (session.selectedRole === UserRole.RECIPIENT && !recipient) {
       throw new BadRequestException('Registration data is incomplete.');
     }
 
@@ -280,6 +338,14 @@ export class RegistrationService {
         whatsappCountryCode: contact.whatsappCountryCode,
         whatsappNumber: contact.whatsappNumber,
         normalizedWhatsappNumber: contact.normalizedWhatsappNumber,
+        issuingCountry:
+          session.selectedRole === UserRole.RECIPIENT
+            ? recipient!.issuingCountry
+            : null,
+        identificationNumber:
+          session.selectedRole === UserRole.RECIPIENT
+            ? recipient!.identificationNumber
+            : null,
       });
 
       await profiles.save(profile);
@@ -302,7 +368,7 @@ export class RegistrationService {
       return savedUser.id;
     });
 
-    return { userId };
+    return { userId, accountStatus };
   }
 
   private async requireOpenSession(id: string): Promise<RegistrationSession> {

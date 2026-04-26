@@ -47,4 +47,11 @@ export class UserProfile extends BaseEntity {
     nullable: true,
   })
   normalizedWhatsappNumber!: string | null;
+
+  /** Filled for Recipient accounts after registration. */
+  @Column({ name: 'issuing_country', type: 'varchar', length: 120, nullable: true })
+  issuingCountry!: string | null;
+
+  @Column({ name: 'identification_number', type: 'text', nullable: true })
+  identificationNumber!: string | null;
 }
