@@ -241,7 +241,9 @@ export class RegistrationService {
       );
     }
     if (session.selectedRole !== UserRole.RECIPIENT) {
-      throw new BadRequestException('This step is only for recipient registration.');
+      throw new BadRequestException(
+        'This step is only for recipient registration.',
+      );
     }
 
     const issuingCountry = dto.issuingCountry.trim();
