@@ -45,11 +45,11 @@ export class RegistrationController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: RegistrationPersonalInfoStepDto,
   ) {
-    // return this.registration.savePersonalInfoStep(id, dto);
-    return {
-      message: 'Personal info step saved',
-      data: dto,
-    };
+    return this.registration.savePersonalInfoStep(id, dto);
+    // return {
+    //   message: 'Personal info step saved',
+    //   data: dto,
+    // };
   }
 
   @Patch('registration-sessions/:id/steps/location')

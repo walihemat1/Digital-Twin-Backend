@@ -200,6 +200,43 @@ export class RegistrationService {
     return this.sessions.save(session);
   }
 
+  // TODO
+  // async verifyEmail(dto: VerfiyEmailDTo): Promise<RegistrationSession> {
+  //   const ch = await this.mfa.findOne({ where: { id: dto.mfaChallengeId } });
+  //   if (!ch) {
+  //     throw new UnauthorizedException(
+  //       'Invalid or expired verification request.',
+  //     );
+  //   }
+  //   if (ch.verifiedAt !== null || ch.invalidatedAt !== null) {
+  //     throw new UnauthorizedException('This code is no longer valid.');
+  //   }
+  //   if (ch.expiresAt.getTime() <= Date.now()) {
+  //     await this.mfa.update(ch.id, { attemptCount: ch.attemptCount + 1 });
+  //     throw new UnauthorizedException(
+  //       'The code has expired. Request a new one.',
+  //     );
+  //   }
+
+  //   const user = await this.users.findOne({ where: { id: ch.userId } });
+  //   if (!user || user.accountStatus !== AccountStatus.ACTIVE) {
+  //     throw new ForbiddenException('Account is not active.');
+  //   }
+
+  //   const match = await bcrypt.compare(dto.code, ch.codeHash);
+  //   if (!match) {
+  //     await this.mfa.update(ch.id, { attemptCount: ch.attemptCount + 1 });
+  //     throw new UnauthorizedException('The code is incorrect.');
+  //   }
+
+  //   ch.verifiedAt = new Date();
+  //   await this.mfa.save(ch);
+  //   user.failedAttemptCount = 0;
+  //   user.lastLoginAt = new Date();
+  //   await this.users.save(user);
+  //   return this.authTokens.buildTokenPair(user);
+  // }
+
   async saveLocationStep(
     id: string,
     dto: RegistrationLocationStepDto,
@@ -241,7 +278,9 @@ export class RegistrationService {
       );
     }
     if (session.selectedRole !== UserRole.RECIPIENT) {
-      throw new BadRequestException('This step is only for recipient registration.');
+      throw new BadRequestException(
+        'This step is only for recipient registration.',
+      );
     }
 
     const issuingCountry = dto.issuingCountry.trim();

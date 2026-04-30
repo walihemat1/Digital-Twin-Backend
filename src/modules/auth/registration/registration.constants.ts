@@ -19,6 +19,7 @@ export const RegistrationStep = {
   AWAITING_ROLE: 'awaiting_role',
   AWAITING_CONTACT: 'awaiting_contact',
   AWAITING_PERSONAL_INFO: 'awaiting_personal_info',
+  AWAITING_EMAIL_VERIFICATION: 'awaiting_email_verification',
   AWAITING_LOCATION: 'awaiting_location',
   AWAITING_RECIPIENT_DETAILS: 'awaiting_recipient_details',
   READY_TO_COMPLETE: 'ready_to_complete',
