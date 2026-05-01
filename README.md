@@ -98,3 +98,17 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 
 ## adding mfa verifiction testing
+
+## Registration verification (backend)
+
+- Contact step now sends a WhatsApp verification code and blocks progression until verified. Personal info step is blocked unless WhatsApp verification succeeds.
+- Personal info step triggers email verification and blocks progression until email verification succeeds. Final account creation is blocked unless both verifications are complete.
+- New endpoints (all under `POST /auth`):
+  - `registration-sessions/{id}/whatsapp-verification/send|resend|verify`
+  - `registration-sessions/{id}/email-verification/send|resend|verify`
+- Data model additions:
+  - `registration_sessions`: whatsapp/email verification status + sent/verified timestamps
+  - `registration_verification_codes`: hashed codes, expires_at, attempt/resend counts
+- Env configuration:
+  - `REG_VERIFICATION_CODE_TTL_SECONDS`, `REG_VERIFICATION_MAX_ATTEMPTS`, `REG_VERIFICATION_MAX_RESENDS`, `REG_VERIFICATION_RESEND_COOLDOWN_SECONDS`
+  - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` (WhatsApp), `SENDGRID_API_KEY`, `EMAIL_FROM` (email)

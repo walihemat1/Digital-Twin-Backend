@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { DataSource, Repository } from 'typeorm';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { ApprovalRequestStatus } from '../../../common/enums/approval-request-status.enum';
+import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { normalizeEmail } from '../../../common/utils/normalization.util';
 import authConfig from '../../../config/auth.config';
@@ -21,6 +22,7 @@ import { UserProfile } from '../../users/entities/user-profile.entity';
 import { RegistrationContactStepDto } from '../dto/registration-contact-step.dto';
 import { RegistrationLocationStepDto } from '../dto/registration-location-step.dto';
 import { RegistrationPersonalInfoStepDto } from '../dto/registration-personal-info-step.dto';
+import { RegistrationVerifyCodeDto } from '../dto/registration-verify-code.dto';
 import { RegistrationRecipientDetailsStepDto } from '../dto/registration-recipient-details-step.dto';
 import { SelectRoleDto } from '../dto/select-role.dto';
 import { RegistrationSession } from '../entities/registration-session.entity';
@@ -31,6 +33,7 @@ import {
   REGISTRATION_SESSION_TTL_MS,
   RegistrationStep,
 } from './registration.constants';
+import { RegistrationVerificationService } from './registration-verification.service';
 import {
   isPasswordPolicyCompliant,
   passwordPolicyFailureMessage,
@@ -76,6 +79,7 @@ export class RegistrationService {
     @InjectRepository(UserProfile)
     private readonly profiles: Repository<UserProfile>,
     private readonly dataSource: DataSource,
+    private readonly verification: RegistrationVerificationService,
     @Inject(authConfig.KEY)
     private readonly auth: ConfigType<typeof authConfig>,
   ) {}
@@ -90,6 +94,12 @@ export class RegistrationService {
       personalInfoPayload: null,
       locationPayload: null,
       recipientDetailsPayload: null,
+      whatsappVerificationStatus: VerificationStatus.NOT_STARTED,
+      whatsappVerificationSentAt: null,
+      whatsappVerifiedAt: null,
+      emailVerificationStatus: VerificationStatus.NOT_STARTED,
+      emailVerificationSentAt: null,
+      emailVerifiedAt: null,
       expiresAt: new Date(now.getTime() + REGISTRATION_SESSION_TTL_MS),
     });
     return this.sessions.save(session);
@@ -121,6 +131,12 @@ export class RegistrationService {
       session.personalInfoPayload = null;
       session.locationPayload = null;
       session.recipientDetailsPayload = null;
+      session.whatsappVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.whatsappVerificationSentAt = null;
+      session.whatsappVerifiedAt = null;
+      session.emailVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.emailVerificationSentAt = null;
+      session.emailVerifiedAt = null;
     }
 
     return this.sessions.save(session);
@@ -132,7 +148,10 @@ export class RegistrationService {
   ): Promise<RegistrationSession> {
     const session = await this.requireOpenSession(id);
 
-    if (session.currentStep !== RegistrationStep.AWAITING_CONTACT) {
+    if (
+      session.currentStep === RegistrationStep.AWAITING_ROLE ||
+      session.currentStep === null
+    ) {
       throw new BadRequestException('Contact step is not available yet.');
     }
 
@@ -151,9 +170,33 @@ export class RegistrationService {
       normalizedWhatsappNumber: normalized,
     };
 
-    session.contactPayload = payload as unknown as Record<string, unknown>;
-    session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
+    const existing =
+      session.contactPayload as ContactPayloadV1 | Record<string, unknown> | null;
+    const numberChanged =
+      !existing ||
+      (existing as ContactPayloadV1).normalizedWhatsappNumber !== normalized;
 
+    session.contactPayload = payload as unknown as Record<string, unknown>;
+    const needsVerification =
+      numberChanged ||
+      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED;
+
+    if (needsVerification) {
+      session.whatsappVerifiedAt = null;
+      session.whatsappVerificationSentAt = null;
+      session.whatsappVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.currentStep = RegistrationStep.AWAITING_WHATSAPP_VERIFICATION;
+      await this.verification.sendWhatsappCode(session);
+      return this.sessions.findOneOrFail({ where: { id: session.id } });
+    }
+
+    // Already verified and number unchanged; keep progressing if still early in the flow
+    if (
+      session.currentStep === RegistrationStep.AWAITING_CONTACT ||
+      session.currentStep === RegistrationStep.AWAITING_WHATSAPP_VERIFICATION
+    ) {
+      session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
+    }
     return this.sessions.save(session);
   }
 
@@ -163,7 +206,11 @@ export class RegistrationService {
   ): Promise<RegistrationSession> {
     const session = await this.requireOpenSession(id);
 
-    if (session.currentStep !== RegistrationStep.AWAITING_PERSONAL_INFO) {
+    if (
+      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED ||
+      (session.currentStep !== RegistrationStep.AWAITING_PERSONAL_INFO &&
+        session.currentStep !== RegistrationStep.AWAITING_EMAIL_VERIFICATION)
+    ) {
       throw new BadRequestException('Personal info step is not available yet.');
     }
 
@@ -176,8 +223,8 @@ export class RegistrationService {
     }
 
     const email = normalizeEmail(dto.email);
-    const existing = await this.users.exist({ where: { email } });
-    if (existing) {
+    const emailExists = await this.users.exist({ where: { email } });
+    if (emailExists) {
       throw new ConflictException('Email is already registered.');
     }
 
@@ -194,10 +241,96 @@ export class RegistrationService {
       passwordPolicyVersion: PASSWORD_POLICY_VERSION,
     };
 
-    session.personalInfoPayload = payload as unknown as Record<string, unknown>;
-    session.currentStep = RegistrationStep.AWAITING_LOCATION;
+    const existing =
+      session.personalInfoPayload as
+        | (PersonalInfoPayloadV1 & Record<string, unknown>)
+        | null;
+    const emailChanged = !existing || existing.email !== email;
 
+    session.personalInfoPayload = payload as unknown as Record<string, unknown>;
+
+    if (emailChanged || session.emailVerificationStatus !== VerificationStatus.VERIFIED) {
+      session.emailVerifiedAt = null;
+      session.emailVerificationSentAt = null;
+      session.emailVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.currentStep = RegistrationStep.AWAITING_EMAIL_VERIFICATION;
+      await this.verification.sendEmailCode(session);
+      return this.sessions.findOneOrFail({ where: { id: session.id } });
+    }
+
+    if (
+      session.currentStep === RegistrationStep.AWAITING_PERSONAL_INFO ||
+      session.currentStep === RegistrationStep.AWAITING_EMAIL_VERIFICATION
+    ) {
+      session.currentStep = RegistrationStep.AWAITING_LOCATION;
+    }
     return this.sessions.save(session);
+  }
+
+  async sendWhatsappVerification(id: string): Promise<RegistrationSession> {
+    const session = await this.requireOpenSession(id);
+    if (!session.contactPayload) {
+      throw new BadRequestException('Contact details are required first.');
+    }
+    if (session.whatsappVerificationStatus === VerificationStatus.VERIFIED) {
+      return session;
+    }
+    session.currentStep = RegistrationStep.AWAITING_WHATSAPP_VERIFICATION;
+    await this.verification.sendWhatsappCode(session);
+    return this.sessions.findOneOrFail({ where: { id: session.id } });
+  }
+
+  async resendWhatsappVerification(id: string): Promise<RegistrationSession> {
+    return this.sendWhatsappVerification(id);
+  }
+
+  async verifyWhatsappCode(
+    id: string,
+    dto: RegistrationVerifyCodeDto,
+  ): Promise<RegistrationSession> {
+    const session = await this.requireOpenSession(id);
+    const result = await this.verification.verifyWhatsappCode(
+      session,
+      dto.code.trim(),
+    );
+    if (result.verifiedAt) {
+      session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
+      await this.sessions.save(session);
+    }
+    return this.sessions.findOneOrFail({ where: { id: session.id } });
+  }
+
+  async sendEmailVerification(id: string): Promise<RegistrationSession> {
+    const session = await this.requireOpenSession(id);
+    if (!session.personalInfoPayload) {
+      throw new BadRequestException('Personal information is required first.');
+    }
+    if (session.emailVerificationStatus === VerificationStatus.VERIFIED) {
+      return session;
+    }
+    session.currentStep = RegistrationStep.AWAITING_EMAIL_VERIFICATION;
+    await this.verification.sendEmailCode(session);
+    return this.sessions.findOneOrFail({ where: { id: session.id } });
+  }
+
+  async resendEmailVerification(id: string): Promise<RegistrationSession> {
+    return this.sendEmailVerification(id);
+  }
+
+  async verifyEmailCode(
+    id: string,
+    dto: RegistrationVerifyCodeDto,
+  ): Promise<RegistrationSession> {
+    const session = await this.requireOpenSession(id);
+    const result = await this.verification.verifyEmailCode(
+      session,
+      dto.code.trim(),
+    );
+    if (result.verifiedAt) {
+      session.currentStep = RegistrationStep.AWAITING_LOCATION;
+      await this.sessions.save(session);
+    }
+    return this.sessions.findOneOrFail({ where: { id: session.id } });
   }
 
   // TODO
@@ -242,6 +375,10 @@ export class RegistrationService {
     dto: RegistrationLocationStepDto,
   ): Promise<RegistrationSession> {
     const session = await this.requireOpenSession(id);
+
+    if (session.emailVerificationStatus !== VerificationStatus.VERIFIED) {
+      throw new BadRequestException('Email verification is required before continuing.');
+    }
 
     if (session.currentStep !== RegistrationStep.AWAITING_LOCATION) {
       throw new BadRequestException('Location step is not available yet.');
@@ -331,6 +468,13 @@ export class RegistrationService {
     }
     if (session.selectedRole === UserRole.RECIPIENT && !recipient) {
       throw new BadRequestException('Registration data is incomplete.');
+    }
+
+    if (session.whatsappVerificationStatus !== VerificationStatus.VERIFIED) {
+      throw new BadRequestException('WhatsApp verification is required.');
+    }
+    if (session.emailVerificationStatus !== VerificationStatus.VERIFIED) {
+      throw new BadRequestException('Email verification is required.');
     }
 
     const accountStatus =
