@@ -27,4 +27,5 @@ export default new DataSource({
   entities: ['src/**/*.entity.ts', 'dist/**/*.entity.js'],
   // CLI runs from repo root with ts-node; listing dist/*.js too duplicates classes when a build exists.
   migrations: ['src/database/migrations/*.ts'],
+  migrationsTransactionMode: 'none',
 });
