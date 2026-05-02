@@ -48,6 +48,34 @@ export class SendgridEmailService {
     });
   }
 
+  async sendRegistrationVerificationCode(
+    toEmail: string,
+    firstName: string,
+    code: string,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const from = this.auth.emailFrom;
+    if (!this.isConfigured || from.length === 0) {
+      this.log.warn(
+        `Registration email verification skipped: SendGrid/EMAIL_FROM not configured (to=${this.redact(
+          toEmail,
+        )}).`,
+      );
+      return;
+    }
+    const subject = 'Your registration verification code';
+    const minutes = Math.ceil(ttlSeconds / 60);
+    await sendgrid.send({
+      to: toEmail,
+      from,
+      subject,
+      text: `Hi ${firstName}, your verification code is ${code}. It expires in ${minutes} minutes.`,
+      html: `<p>Hi ${this.escapeHtml(firstName)},</p>
+<p>Your registration verification code is: <strong>${this.escapeHtml(code)}</strong></p>
+<p>This code expires in ${minutes} minutes.</p>`,
+    });
+  }
+
   async sendPasswordReset(
     toEmail: string,
     firstName: string,

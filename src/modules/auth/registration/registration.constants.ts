@@ -18,6 +18,7 @@ export const REGISTRATION_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const RegistrationStep = {
   AWAITING_ROLE: 'awaiting_role',
   AWAITING_CONTACT: 'awaiting_contact',
+  AWAITING_WHATSAPP_VERIFICATION: 'awaiting_whatsapp_verification',
   AWAITING_PERSONAL_INFO: 'awaiting_personal_info',
   AWAITING_EMAIL_VERIFICATION: 'awaiting_email_verification',
   AWAITING_LOCATION: 'awaiting_location',

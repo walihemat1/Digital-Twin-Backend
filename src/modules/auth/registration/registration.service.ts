@@ -13,6 +13,7 @@ import { DataSource, Repository } from 'typeorm';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { ApprovalRequestStatus } from '../../../common/enums/approval-request-status.enum';
 import { UserRole } from '../../../common/enums/user-role.enum';
+import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { normalizeEmail } from '../../../common/utils/normalization.util';
 import authConfig from '../../../config/auth.config';
 import { ApprovalRequest } from '../../approval/entities/approval-request.entity';
@@ -115,6 +116,9 @@ export class RegistrationService {
 
     session.selectedRole = dto.role;
     session.currentStep = RegistrationStep.AWAITING_CONTACT;
+    session.verificationStatus = VerificationStatus.UNVERIFIED;
+    session.whatsappVerificationStatus = VerificationStatus.UNVERIFIED;
+    session.emailVerificationStatus = VerificationStatus.UNVERIFIED;
 
     if (roleChanged) {
       session.contactPayload = null;
@@ -152,7 +156,9 @@ export class RegistrationService {
     };
 
     session.contactPayload = payload as unknown as Record<string, unknown>;
-    session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
+    session.currentStep = RegistrationStep.AWAITING_WHATSAPP_VERIFICATION;
+    session.verificationStatus = VerificationStatus.UNVERIFIED;
+    session.whatsappVerificationStatus = VerificationStatus.UNVERIFIED;
 
     return this.sessions.save(session);
   }
@@ -195,7 +201,9 @@ export class RegistrationService {
     };
 
     session.personalInfoPayload = payload as unknown as Record<string, unknown>;
-    session.currentStep = RegistrationStep.AWAITING_LOCATION;
+    session.currentStep = RegistrationStep.AWAITING_EMAIL_VERIFICATION;
+    session.verificationStatus = VerificationStatus.UNVERIFIED;
+    session.emailVerificationStatus = VerificationStatus.UNVERIFIED;
 
     return this.sessions.save(session);
   }
@@ -331,6 +339,12 @@ export class RegistrationService {
     }
     if (session.selectedRole === UserRole.RECIPIENT && !recipient) {
       throw new BadRequestException('Registration data is incomplete.');
+    }
+    if (
+      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED ||
+      session.emailVerificationStatus !== VerificationStatus.VERIFIED
+    ) {
+      throw new BadRequestException('Verification steps are not complete.');
     }
 
     const accountStatus =

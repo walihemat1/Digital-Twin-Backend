@@ -6,13 +6,17 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import authConfig from '../../config/auth.config';
 import { UsersModule } from '../users/users.module';
 import { AuthSessionController } from './controllers/auth-session.controller';
+import { RegistrationVerificationController } from './controllers/registration-verification.controller';
 import { RegistrationController } from './controllers/registration.controller';
 import { MfaChallenge } from './entities/mfa-challenge.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { RegistrationSession } from './entities/registration-session.entity';
+import { RegistrationVerification } from './entities/registration-verification.entity';
 import { SendgridEmailService } from './email/sendgrid-email.service';
 import { RegistrationService } from './registration/registration.service';
+import { RegistrationVerificationService } from './registration/registration-verification.service';
+import { TwilioWhatsappService } from './registration/twilio-whatsapp.service';
 import { AuthLoginService } from './services/auth-login.service';
 import { AuthTokensService } from './services/auth-tokens.service';
 import { MfaChallengeService } from './services/mfa-challenge.service';
@@ -37,6 +41,7 @@ import { UserProfile } from '../users/entities/user-profile.entity';
     UsersModule,
     TypeOrmModule.forFeature([
       RegistrationSession,
+      RegistrationVerification,
       User,
       UserProfile,
       MfaChallenge,
@@ -44,10 +49,16 @@ import { UserProfile } from '../users/entities/user-profile.entity';
       RefreshToken,
     ]),
   ],
-  controllers: [RegistrationController, AuthSessionController],
+  controllers: [
+    RegistrationController,
+    RegistrationVerificationController,
+    AuthSessionController,
+  ],
   providers: [
     JwtStrategy,
     RegistrationService,
+    RegistrationVerificationService,
+    TwilioWhatsappService,
     SendgridEmailService,
     AuthLoginService,
     MfaChallengeService,
