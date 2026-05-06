@@ -4,7 +4,7 @@
 // the app.module.ts file knows which config file to use because it is imported in the app.module.ts file. The load function in the app.module.ts file is used to load the config files into the config module, which is then used to get the configuration values.
 import { registerAs } from '@nestjs/config';
 
-export default registerAs('auth', () => ({
+const authConfig = registerAs('auth', () => ({
   accessTokenSecret:
     process.env.JWT_ACCESS_TOKEN_SECRET ?? 'change-this-access-secret',
   accessTokenExpiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN ?? '15m',
@@ -40,3 +40,6 @@ export default registerAs('auth', () => ({
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
   twilioFromNumber: process.env.TWILIO_FROM_NUMBER ?? '',
 }));
+
+export type AuthConfigValues = ReturnType<typeof authConfig>;
+export default authConfig;

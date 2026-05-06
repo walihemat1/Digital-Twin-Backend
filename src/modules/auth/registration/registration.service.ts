@@ -14,6 +14,7 @@ import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { ApprovalRequestStatus } from '../../../common/enums/approval-request-status.enum';
 import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { UserRole } from '../../../common/enums/user-role.enum';
+import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { normalizeEmail } from '../../../common/utils/normalization.util';
 import authConfig from '../../../config/auth.config';
 import { ApprovalRequest } from '../../approval/entities/approval-request.entity';
@@ -125,6 +126,9 @@ export class RegistrationService {
 
     session.selectedRole = dto.role;
     session.currentStep = RegistrationStep.AWAITING_CONTACT;
+    session.verificationStatus = VerificationStatus.UNVERIFIED;
+    session.whatsappVerificationStatus = VerificationStatus.UNVERIFIED;
+    session.emailVerificationStatus = VerificationStatus.UNVERIFIED;
 
     if (roleChanged) {
       session.contactPayload = null;
@@ -468,6 +472,12 @@ export class RegistrationService {
     }
     if (session.selectedRole === UserRole.RECIPIENT && !recipient) {
       throw new BadRequestException('Registration data is incomplete.');
+    }
+    if (
+      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED ||
+      session.emailVerificationStatus !== VerificationStatus.VERIFIED
+    ) {
+      throw new BadRequestException('Verification steps are not complete.');
     }
 
     if (session.whatsappVerificationStatus !== VerificationStatus.VERIFIED) {

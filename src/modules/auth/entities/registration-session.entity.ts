@@ -85,6 +85,24 @@ export class RegistrationSession extends BaseEntity {
   })
   verificationStatus!: VerificationStatus;
 
+  @Column({
+    name: 'whatsapp_verification_status',
+    type: 'enum',
+    enum: VerificationStatus,
+    enumName: 'verification_status_enum',
+    default: VerificationStatus.UNVERIFIED,
+  })
+  whatsappVerificationStatus!: VerificationStatus;
+
+  @Column({
+    name: 'email_verification_status',
+    type: 'enum',
+    enum: VerificationStatus,
+    enumName: 'verification_status_enum',
+    default: VerificationStatus.UNVERIFIED,
+  })
+  emailVerificationStatus!: VerificationStatus;
+
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt!: Date | null;
 }
