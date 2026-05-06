@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import authConfig from '../../../config/auth.config';
 
@@ -39,8 +39,15 @@ export class TwilioWhatsappService {
       return;
     }
 
+    const trimmed = (toNumber || '').trim().replace(/\s+/g, '');
+    if (!trimmed.startsWith('+')) {
+      throw new BadRequestException(
+        'WhatsApp number must be in E.164 format starting with +.',
+      );
+    }
+
     const from = this.ensureWhatsappPrefix(this.auth.twilioFromNumber);
-    const to = this.ensureWhatsappPrefix(toNumber);
+    const to = this.ensureWhatsappPrefix(trimmed);
     await this.twilioClient.messages.create({
       from,
       to,

@@ -166,7 +166,7 @@ export class RegistrationService {
 
     const payload: ContactPayloadV1 = {
       whatsappCountryCode: dto.whatsappCountryCode.trim(),
-      whatsappNumber: dto.whatsappNumber.trim(),
+      whatsappNumber: normalized,
       normalizedWhatsappNumber: normalized,
     };
 
