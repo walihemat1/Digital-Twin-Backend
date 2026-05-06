@@ -31,6 +31,52 @@ export class RegistrationSession extends BaseEntity {
   recipientDetailsPayload!: Record<string, unknown> | null;
 
   @Column({
+    name: 'whatsapp_verification_status',
+    type: 'enum',
+    enum: VerificationStatus,
+    enumName: 'verification_status_enum',
+    default: VerificationStatus.NOT_STARTED,
+  })
+  whatsappVerificationStatus!: VerificationStatus;
+
+  @Column({
+    name: 'whatsapp_verification_sent_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  whatsappVerificationSentAt!: Date | null;
+
+  @Column({
+    name: 'whatsapp_verified_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  whatsappVerifiedAt!: Date | null;
+
+  @Column({
+    name: 'email_verification_status',
+    type: 'enum',
+    enum: VerificationStatus,
+    enumName: 'verification_status_enum',
+    default: VerificationStatus.NOT_STARTED,
+  })
+  emailVerificationStatus!: VerificationStatus;
+
+  @Column({
+    name: 'email_verification_sent_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  emailVerificationSentAt!: Date | null;
+
+  @Column({
+    name: 'email_verified_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  emailVerifiedAt!: Date | null;
+
+  @Column({
     name: 'verification_status',
     type: 'enum',
     enum: VerificationStatus,

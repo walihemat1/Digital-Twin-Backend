@@ -12,6 +12,7 @@ import { RegistrationPersonalInfoStepDto } from '../dto/registration-personal-in
 import { RegistrationRecipientDetailsStepDto } from '../dto/registration-recipient-details-step.dto';
 import { RegistrationCompleteDto } from '../dto/registration-complete.dto';
 import { SelectRoleDto } from '../dto/select-role.dto';
+import { RegistrationVerifyCodeDto } from '../dto/registration-verify-code.dto';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { RegistrationService } from '../registration/registration.service';
 
@@ -66,6 +67,50 @@ export class RegistrationController {
     @Body() dto: RegistrationRecipientDetailsStepDto,
   ) {
     return this.registration.saveRecipientDetailsStep(id, dto);
+  }
+
+  @Post('registration-sessions/:id/whatsapp-verification/send')
+  sendWhatsapp(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.registration.sendWhatsappVerification(id);
+  }
+
+  @Post('registration-sessions/:id/whatsapp-verification/resend')
+  resendWhatsapp(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.registration.resendWhatsappVerification(id);
+  }
+
+  @Post('registration-sessions/:id/whatsapp-verification/verify')
+  verifyWhatsapp(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: RegistrationVerifyCodeDto,
+  ) {
+    return this.registration.verifyWhatsappCode(id, dto);
+  }
+
+  @Post('registration-sessions/:id/email-verification/send')
+  sendEmail(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.registration.sendEmailVerification(id);
+  }
+
+  @Post('registration-sessions/:id/email-verification/resend')
+  resendEmail(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.registration.resendEmailVerification(id);
+  }
+
+  @Post('registration-sessions/:id/email-verification/verify')
+  verifyEmail(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: RegistrationVerifyCodeDto,
+  ) {
+    return this.registration.verifyEmailCode(id, dto);
   }
 
   @Post('register/complete')

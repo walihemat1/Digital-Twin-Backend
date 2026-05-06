@@ -83,6 +83,16 @@ export const envValidationSchema = Joi.object({
   /** Optional until messaging milestones (SendGrid). */
   SENDGRID_API_KEY: Joi.string().allow('').optional(),
   EMAIL_FROM: Joi.string().allow('').optional(),
+  REG_VERIFICATION_CODE_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(120)
+    .default(600),
+  REG_VERIFICATION_MAX_ATTEMPTS: Joi.number().integer().min(1).default(5),
+  REG_VERIFICATION_MAX_RESENDS: Joi.number().integer().min(0).default(3),
+  REG_VERIFICATION_RESEND_COOLDOWN_SECONDS: Joi.number()
+    .integer()
+    .min(10)
+    .default(60),
   /** Optional until SMS milestones (Twilio). */
   TWILIO_ACCOUNT_SID: Joi.string().allow('').optional(),
   TWILIO_AUTH_TOKEN: Joi.string().allow('').optional(),

@@ -1,500 +1,267 @@
 import {
   BadRequestException,
+  GoneException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import {
-  DataSource,
-  EntityManager,
-  IsNull,
-  QueryDeepPartialEntity,
-  Repository,
-} from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { NotificationChannel } from '../../../common/enums/notification-channel.enum';
 import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import authConfig from '../../../config/auth.config';
-import { generateSixDigitMfaCode } from '../crypto/opaque-token.util';
-import { RegistrationSession } from '../entities/registration-session.entity';
-import { RegistrationVerification } from '../entities/registration-verification.entity';
 import { SendgridEmailService } from '../email/sendgrid-email.service';
-import { RegistrationStep } from './registration.constants';
+import { RegistrationSession } from '../entities/registration-session.entity';
+import { RegistrationVerificationCode } from '../entities/registration-verification-code.entity';
+import { generateSixDigitMfaCode } from '../crypto/opaque-token.util';
 import { TwilioWhatsappService } from './twilio-whatsapp.service';
 
-type ContactPayload = {
-  whatsappCountryCode: string;
-  whatsappNumber: string;
-  normalizedWhatsappNumber: string;
-};
-
-type PersonalInfoPayload = {
-  firstName: string;
-  lastName: string;
-  email: string;
-};
+type Channel = NotificationChannel.EMAIL | NotificationChannel.WHATSAPP;
 
 @Injectable()
 export class RegistrationVerificationService {
+  private readonly log = new Logger(RegistrationVerificationService.name);
+
   constructor(
+    @InjectRepository(RegistrationVerificationCode)
+    private readonly codes: Repository<RegistrationVerificationCode>,
     @InjectRepository(RegistrationSession)
     private readonly sessions: Repository<RegistrationSession>,
-    @InjectRepository(RegistrationVerification)
-    private readonly verifications: Repository<RegistrationVerification>,
-    private readonly twilio: TwilioWhatsappService,
     private readonly email: SendgridEmailService,
+    private readonly whatsapp: TwilioWhatsappService,
     @Inject(authConfig.KEY)
     private readonly auth: ConfigType<typeof authConfig>,
-    private readonly dataSource: DataSource,
   ) {}
 
-  async sendWhatsappCode(sessionId: string): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    const contact = this.requireContactPayload(session);
-    this.ensureStep(
-      session,
-      RegistrationStep.AWAITING_WHATSAPP_VERIFICATION,
-      'WhatsApp verification is not available for this session.',
+  async sendWhatsappCode(session: RegistrationSession): Promise<{
+    expiresAt: string;
+    resendCount: number;
+  }> {
+    const number =
+      (session.contactPayload as { normalizedWhatsappNumber?: string } | null)
+        ?.normalizedWhatsappNumber;
+    if (!number) {
+      throw new BadRequestException(
+        'WhatsApp number is missing from the registration contact step.',
+      );
+    }
+    return this.issueCode(session, NotificationChannel.WHATSAPP, (code) =>
+      this.whatsapp.sendVerificationCode(number, code),
     );
-    const active = await this.getActiveVerification(
-      session.id,
-      NotificationChannel.WHATSAPP,
-    );
-    this.ensureResendAllowed(active);
-    const resendCount = active ? active.resendCount + 1 : 0;
-
-    const { plainCode } = await this.issueVerification(
-      session.id,
-      NotificationChannel.WHATSAPP,
-      resendCount,
-      {
-        currentStep: RegistrationStep.AWAITING_WHATSAPP_VERIFICATION,
-        verificationStatus: VerificationStatus.PENDING,
-        whatsappVerificationStatus: VerificationStatus.PENDING,
-      },
-    );
-
-    await this.twilio.sendVerificationCode(
-      contact.normalizedWhatsappNumber,
-      plainCode,
-    );
-    return this.requireSession(session.id);
   }
 
-  async resendWhatsappCode(sessionId: string): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    const contact = this.requireContactPayload(session);
-    this.ensureStep(
-      session,
-      RegistrationStep.AWAITING_WHATSAPP_VERIFICATION,
-      'WhatsApp verification is not available for this session.',
-    );
-    const active = await this.getActiveVerification(
-      session.id,
-      NotificationChannel.WHATSAPP,
-    );
-    if (!active) {
-      throw new BadRequestException('No pending WhatsApp verification to resend.');
-    }
-    this.ensureResendAllowed(active);
-
-    const { plainCode } = await this.issueVerification(
-      session.id,
-      NotificationChannel.WHATSAPP,
-      active.resendCount + 1,
-      {
-        currentStep: RegistrationStep.AWAITING_WHATSAPP_VERIFICATION,
-        verificationStatus: VerificationStatus.PENDING,
-        whatsappVerificationStatus: VerificationStatus.PENDING,
-      },
-    );
-
-    await this.twilio.sendVerificationCode(
-      contact.normalizedWhatsappNumber,
-      plainCode,
-    );
-    return this.requireSession(session.id);
+  async resendWhatsappCode(session: RegistrationSession) {
+    return this.sendWhatsappCode(session);
   }
 
   async verifyWhatsappCode(
-    sessionId: string,
+    session: RegistrationSession,
     code: string,
-  ): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    this.ensureStep(
+  ): Promise<{ verifiedAt: string }> {
+    return this.verifyCode(
       session,
-      RegistrationStep.AWAITING_WHATSAPP_VERIFICATION,
-      'WhatsApp verification is not active for this session.',
-    );
-    const verification = await this.getActiveVerification(
-      session.id,
       NotificationChannel.WHATSAPP,
-    );
-    if (!verification) {
-      throw new UnauthorizedException('No WhatsApp verification is pending.');
-    }
-
-    await this.ensureVerificationIsUsable(sessionId, verification);
-    const match = await bcrypt.compare(code, verification.codeHash);
-    if (!match) {
-      await this.handleIncorrectCode(sessionId, verification);
-      throw new UnauthorizedException('The verification code is incorrect.');
-    }
-
-    await this.dataSource.transaction(async (em) => {
-      await em.getRepository(RegistrationVerification).update(verification.id, {
-        verifiedAt: new Date(),
-      });
-
-      await em.getRepository(RegistrationSession).update(session.id, {
-        whatsappVerificationStatus: VerificationStatus.VERIFIED,
-        verificationStatus:
-          session.emailVerificationStatus === VerificationStatus.VERIFIED
-            ? VerificationStatus.VERIFIED
-            : VerificationStatus.PENDING,
-        currentStep: RegistrationStep.AWAITING_PERSONAL_INFO,
-      });
-    });
-
-    return this.requireSession(session.id);
-  }
-
-  async sendEmailCode(sessionId: string): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    const personalInfo = this.requirePersonalInfoPayload(session);
-    this.ensureStep(
-      session,
-      RegistrationStep.AWAITING_EMAIL_VERIFICATION,
-      'Email verification is not available for this session.',
-    );
-    const active = await this.getActiveVerification(
-      session.id,
-      NotificationChannel.EMAIL,
-    );
-    this.ensureResendAllowed(active);
-    const resendCount = active ? active.resendCount + 1 : 0;
-
-    const { plainCode } = await this.issueVerification(
-      session.id,
-      NotificationChannel.EMAIL,
-      resendCount,
-      {
-        currentStep: RegistrationStep.AWAITING_EMAIL_VERIFICATION,
-        verificationStatus: VerificationStatus.PENDING,
-        emailVerificationStatus: VerificationStatus.PENDING,
+      code,
+      (s, now) => {
+        s.whatsappVerificationStatus = VerificationStatus.VERIFIED;
+        s.whatsappVerifiedAt = now;
+      },
+      (s) => {
+        s.whatsappVerificationStatus = VerificationStatus.EXPIRED;
+      },
+      (s) => {
+        s.whatsappVerificationStatus = VerificationStatus.FAILED;
       },
     );
-
-    await this.email.sendRegistrationVerificationCode(
-      personalInfo.email,
-      personalInfo.firstName,
-      plainCode,
-      this.auth.regVerificationCodeTtlSeconds,
-    );
-
-    return this.requireSession(session.id);
   }
 
-  async resendEmailCode(sessionId: string): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    const personalInfo = this.requirePersonalInfoPayload(session);
-    this.ensureStep(
-      session,
-      RegistrationStep.AWAITING_EMAIL_VERIFICATION,
-      'Email verification is not available for this session.',
-    );
-    const active = await this.getActiveVerification(
-      session.id,
-      NotificationChannel.EMAIL,
-    );
-    if (!active) {
-      throw new BadRequestException('No pending email verification to resend.');
+  async sendEmailCode(session: RegistrationSession): Promise<{
+    expiresAt: string;
+    resendCount: number;
+  }> {
+    const personal =
+      session.personalInfoPayload as { email?: string; firstName?: string } | null;
+    if (!personal?.email || !personal.firstName) {
+      throw new BadRequestException(
+        'Email and first name are required before sending verification.',
+      );
     }
-    this.ensureResendAllowed(active);
-
-    const { plainCode } = await this.issueVerification(
-      session.id,
-      NotificationChannel.EMAIL,
-      active.resendCount + 1,
-      {
-        currentStep: RegistrationStep.AWAITING_EMAIL_VERIFICATION,
-        verificationStatus: VerificationStatus.PENDING,
-        emailVerificationStatus: VerificationStatus.PENDING,
-      },
+    return this.issueCode(session, NotificationChannel.EMAIL, (code) =>
+      this.email.sendLoginMfaCode(personal.email!, personal.firstName!, code),
     );
+  }
 
-    await this.email.sendRegistrationVerificationCode(
-      personalInfo.email,
-      personalInfo.firstName,
-      plainCode,
-      this.auth.regVerificationCodeTtlSeconds,
-    );
-
-    return this.requireSession(session.id);
+  async resendEmailCode(session: RegistrationSession) {
+    return this.sendEmailCode(session);
   }
 
   async verifyEmailCode(
-    sessionId: string,
+    session: RegistrationSession,
     code: string,
-  ): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(sessionId);
-    this.ensureStep(
+  ): Promise<{ verifiedAt: string }> {
+    return this.verifyCode(
       session,
-      RegistrationStep.AWAITING_EMAIL_VERIFICATION,
-      'Email verification is not active for this session.',
-    );
-    const verification = await this.getActiveVerification(
-      session.id,
       NotificationChannel.EMAIL,
+      code,
+      (s, now) => {
+        s.emailVerificationStatus = VerificationStatus.VERIFIED;
+        s.emailVerifiedAt = now;
+      },
+      (s) => {
+        s.emailVerificationStatus = VerificationStatus.EXPIRED;
+      },
+      (s) => {
+        s.emailVerificationStatus = VerificationStatus.FAILED;
+      },
     );
-    if (!verification) {
-      throw new UnauthorizedException('No email verification is pending.');
-    }
-
-    await this.ensureVerificationIsUsable(sessionId, verification);
-    const match = await bcrypt.compare(code, verification.codeHash);
-    if (!match) {
-      await this.handleIncorrectCode(sessionId, verification);
-      throw new UnauthorizedException('The verification code is incorrect.');
-    }
-
-    await this.dataSource.transaction(async (em) => {
-      await em.getRepository(RegistrationVerification).update(verification.id, {
-        verifiedAt: new Date(),
-      });
-
-      await em.getRepository(RegistrationSession).update(session.id, {
-        emailVerificationStatus: VerificationStatus.VERIFIED,
-        verificationStatus: VerificationStatus.VERIFIED,
-        currentStep: RegistrationStep.AWAITING_LOCATION,
-      });
-    });
-
-    return this.requireSession(session.id);
   }
 
-  private async issueVerification(
-    sessionId: string,
-    channel: NotificationChannel,
-    resendCount: number,
-    sessionUpdate: Partial<RegistrationSession>,
-  ): Promise<{ plainCode: string }> {
+  private async issueCode(
+    session: RegistrationSession,
+    channel: Channel,
+    send: (code: string) => Promise<void>,
+  ): Promise<{ expiresAt: string; resendCount: number }> {
+    await this.ensureSessionActive(session);
     const now = new Date();
-    const plainCode = generateSixDigitMfaCode();
-    const codeHash = await bcrypt.hash(plainCode, this.auth.bcryptSaltRounds);
-    const expiresAt = new Date(
-      now.getTime() + this.auth.regVerificationCodeTtlSeconds * 1000,
-    );
-
-    await this.dataSource.transaction(async (em) => {
-      await this.invalidatePendingInTx(em, sessionId, channel);
-      const repo = em.getRepository(RegistrationVerification);
-      const record = repo.create({
-        registrationSessionId: sessionId,
-        channel,
-        codeHash,
-        issuedAt: now,
-        expiresAt,
-        verifiedAt: null,
-        invalidatedAt: null,
-        attemptCount: 0,
-        resendCount,
-      });
-      await repo.save(record);
-
-      if (Object.keys(sessionUpdate).length > 0) {
-        await em.getRepository(RegistrationSession).update(
-          { id: sessionId },
-          sessionUpdate as QueryDeepPartialEntity<RegistrationSession>,
-        );
-      }
-    });
-
-    return { plainCode };
-  }
-
-  private async handleIncorrectCode(
-    sessionId: string,
-    verification: RegistrationVerification,
-  ): Promise<void> {
-    const attempts = verification.attemptCount + 1;
-    const maxAttempts = this.auth.regVerificationMaxAttempts;
-    const shouldInvalidate = attempts >= maxAttempts;
-    const updates: Partial<RegistrationVerification> = {
-      attemptCount: attempts,
-    };
-    if (shouldInvalidate) {
-      updates.invalidatedAt = new Date();
-      const sessionUpdate: Partial<RegistrationSession> = {
-        verificationStatus: VerificationStatus.FAILED,
-      };
-      if (verification.channel === NotificationChannel.WHATSAPP) {
-        sessionUpdate.whatsappVerificationStatus = VerificationStatus.FAILED;
-      }
-      if (verification.channel === NotificationChannel.EMAIL) {
-        sessionUpdate.emailVerificationStatus = VerificationStatus.FAILED;
-      }
-      await this.sessions.update(
-        sessionId,
-        sessionUpdate as QueryDeepPartialEntity<RegistrationSession>,
-      );
-    }
-    await this.verifications.update(
-      verification.id,
-      updates as QueryDeepPartialEntity<RegistrationVerification>,
-    );
-  }
-
-  private ensureResendAllowed(
-    active: RegistrationVerification | null,
-  ): void {
-    if (!active) return;
-    if (active.resendCount >= this.auth.regVerificationMaxResends) {
-      throw new BadRequestException('Resend limit reached for this channel.');
-    }
-    const cooldownMs = this.auth.regVerificationResendCooldownSeconds * 1000;
-    const nextAllowed = active.issuedAt.getTime() + cooldownMs;
-    if (nextAllowed > Date.now()) {
-      const waitSeconds = Math.ceil((nextAllowed - Date.now()) / 1000);
-      throw new BadRequestException(
-        `Please wait ${waitSeconds}s before requesting another code.`,
-      );
-    }
-  }
-
-  private async ensureVerificationIsUsable(
-    sessionId: string,
-    verification: RegistrationVerification,
-  ): Promise<void> {
-    if (verification.verifiedAt || verification.invalidatedAt) {
-      throw new UnauthorizedException('Verification is no longer active.');
-    }
-    if (verification.expiresAt.getTime() <= Date.now()) {
-      await this.verifications.update(
-        verification.id,
-        { invalidatedAt: new Date() } as QueryDeepPartialEntity<RegistrationVerification>,
-      );
-      const sessionUpdate: Partial<RegistrationSession> = {
-        verificationStatus: VerificationStatus.FAILED,
-      };
-      if (verification.channel === NotificationChannel.WHATSAPP) {
-        sessionUpdate.whatsappVerificationStatus = VerificationStatus.FAILED;
-      }
-      if (verification.channel === NotificationChannel.EMAIL) {
-        sessionUpdate.emailVerificationStatus = VerificationStatus.FAILED;
-      }
-      await this.sessions.update(
-        sessionId,
-        sessionUpdate as QueryDeepPartialEntity<RegistrationSession>,
-      );
-      throw new UnauthorizedException('Verification code has expired.');
-    }
-    if (verification.attemptCount >= this.auth.regVerificationMaxAttempts) {
-      await this.verifications.update(
-        verification.id,
-        { invalidatedAt: new Date() } as QueryDeepPartialEntity<RegistrationVerification>,
-      );
-      const sessionUpdate: Partial<RegistrationSession> = {
-        verificationStatus: VerificationStatus.FAILED,
-      };
-      if (verification.channel === NotificationChannel.WHATSAPP) {
-        sessionUpdate.whatsappVerificationStatus = VerificationStatus.FAILED;
-      }
-      if (verification.channel === NotificationChannel.EMAIL) {
-        sessionUpdate.emailVerificationStatus = VerificationStatus.FAILED;
-      }
-      await this.sessions.update(
-        sessionId,
-        sessionUpdate as QueryDeepPartialEntity<RegistrationSession>,
-      );
-      throw new UnauthorizedException('Maximum verification attempts exceeded.');
-    }
-  }
-
-  private async invalidatePendingInTx(
-    em: EntityManager,
-    sessionId: string,
-    channel: NotificationChannel,
-  ): Promise<void> {
-    await em
-      .createQueryBuilder()
-      .update(RegistrationVerification)
-      .set({ invalidatedAt: new Date() })
-      .where('registration_session_id = :sessionId', { sessionId })
-      .andWhere('channel = :channel', { channel })
-      .andWhere('verified_at IS NULL')
-      .andWhere('invalidated_at IS NULL')
-      .execute();
-  }
-
-  private async getActiveVerification(
-    sessionId: string,
-    channel: NotificationChannel,
-  ): Promise<RegistrationVerification | null> {
-    return this.verifications.findOne({
+    const latest = await this.codes.findOne({
       where: {
-        registrationSessionId: sessionId,
+        registrationSessionId: session.id,
         channel,
-        verifiedAt: IsNull(),
         invalidatedAt: IsNull(),
       },
       order: { issuedAt: 'DESC' },
     });
-  }
 
-  private ensureStep(
-    session: RegistrationSession,
-    expectedStep: string,
-    message: string,
-  ) {
-    if (session.currentStep !== expectedStep) {
-      throw new BadRequestException(message);
-    }
-  }
-
-  private requireContactPayload(session: RegistrationSession): ContactPayload {
-    const contact =
-      session.contactPayload as unknown as ContactPayload | null;
-    if (!contact || !contact.normalizedWhatsappNumber) {
-      throw new BadRequestException('Contact step has not been completed.');
-    }
-    return contact;
-  }
-
-  private requirePersonalInfoPayload(
-    session: RegistrationSession,
-  ): PersonalInfoPayload {
-    const payload =
-      session.personalInfoPayload as unknown as PersonalInfoPayload | null;
-    if (!payload || !payload.email) {
-      throw new BadRequestException(
-        'Personal info step has not been completed.',
+    if (latest) {
+      const cooldownMs = this.auth.regVerificationResendCooldownSeconds * 1000;
+      if (now.getTime() - latest.issuedAt.getTime() < cooldownMs) {
+        throw new BadRequestException(
+          'Please wait before requesting another verification code.',
+        );
+      }
+      if (latest.resendCount >= this.auth.regVerificationMaxResends) {
+        throw new BadRequestException(
+          'Resend limit reached for this verification.',
+        );
+      }
+      await this.codes.update(
+        { id: latest.id },
+        { invalidatedAt: now, resendCount: latest.resendCount },
       );
     }
-    return payload;
+
+    const plain = generateSixDigitMfaCode();
+    const codeHash = await bcrypt.hash(plain, this.auth.bcryptSaltRounds);
+    const expiresAt = new Date(
+      now.getTime() + this.auth.regVerificationCodeTtlSeconds * 1000,
+    );
+    const record = this.codes.create({
+      registrationSessionId: session.id,
+      channel,
+      codeHash,
+      issuedAt: now,
+      expiresAt,
+      verifiedAt: null,
+      invalidatedAt: null,
+      attemptCount: 0,
+      resendCount: latest ? latest.resendCount + 1 : 0,
+    });
+    await this.codes.save(record);
+
+    await send(plain);
+
+    if (channel === NotificationChannel.WHATSAPP) {
+      session.whatsappVerificationStatus = VerificationStatus.PENDING;
+      session.whatsappVerificationSentAt = now;
+      session.whatsappVerifiedAt = null;
+    } else {
+      session.emailVerificationStatus = VerificationStatus.PENDING;
+      session.emailVerificationSentAt = now;
+      session.emailVerifiedAt = null;
+    }
+    await this.sessions.save(session);
+
+    return {
+      expiresAt: expiresAt.toISOString(),
+      resendCount: record.resendCount,
+    };
   }
 
-  private async requireOpenSession(
-    id: string,
-  ): Promise<RegistrationSession> {
-    const session = await this.sessions.findOne({ where: { id } });
-    if (!session) {
-      throw new NotFoundException('Registration session not found.');
+  private async verifyCode(
+    session: RegistrationSession,
+    channel: Channel,
+    code: string,
+    onSuccess: (session: RegistrationSession, now: Date) => void,
+    onExpired: (session: RegistrationSession) => void,
+    onAttemptsExceeded: (session: RegistrationSession) => void,
+  ): Promise<{ verifiedAt: string }> {
+    await this.ensureSessionActive(session);
+    const latest = await this.codes.findOne({
+      where: {
+        registrationSessionId: session.id,
+        channel,
+        invalidatedAt: IsNull(),
+        verifiedAt: IsNull(),
+      },
+      order: { issuedAt: 'DESC' },
+    });
+    if (!latest) {
+      throw new NotFoundException('No active verification request found.');
     }
+
+    const now = new Date();
+    if (latest.expiresAt.getTime() <= now.getTime()) {
+      await this.codes.update({ id: latest.id }, { invalidatedAt: now });
+      onExpired(session);
+      await this.sessions.save(session);
+      throw new GoneException(
+        'The verification code has expired. Request a new one.',
+      );
+    }
+    if (latest.attemptCount >= this.auth.regVerificationMaxAttempts) {
+      await this.codes.update({ id: latest.id }, { invalidatedAt: now });
+      onAttemptsExceeded(session);
+      await this.sessions.save(session);
+      throw new BadRequestException(
+        'Too many attempts. Request a new verification code.',
+      );
+    }
+
+    const match = await bcrypt.compare(code, latest.codeHash);
+    if (!match) {
+      const nextAttempts = latest.attemptCount + 1;
+      const invalidatedAt =
+        nextAttempts >= this.auth.regVerificationMaxAttempts ? now : null;
+      await this.codes.update(
+        { id: latest.id },
+        { attemptCount: nextAttempts, invalidatedAt },
+      );
+      if (invalidatedAt) {
+        onAttemptsExceeded(session);
+        await this.sessions.save(session);
+        throw new BadRequestException(
+          'Too many attempts. Request a new verification code.',
+        );
+      }
+      throw new UnauthorizedException('The verification code is incorrect.');
+    }
+
+    await this.codes.update(
+      { id: latest.id },
+      { verifiedAt: now, attemptCount: latest.attemptCount },
+    );
+    onSuccess(session, now);
+    await this.sessions.save(session);
+    return { verifiedAt: now.toISOString() };
+  }
+
+  private async ensureSessionActive(session: RegistrationSession) {
     if (!session.expiresAt || session.expiresAt.getTime() < Date.now()) {
-      throw new UnauthorizedException('Registration session has expired.');
+      throw new GoneException('Registration session has expired.');
     }
-    return session;
-  }
-
-  private async requireSession(id: string): Promise<RegistrationSession> {
-    const session = await this.sessions.findOne({ where: { id } });
-    if (!session) {
-      throw new NotFoundException('Registration session not found.');
-    }
-    return session;
   }
 }

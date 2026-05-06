@@ -24,6 +24,9 @@ import { PasswordRecoveryService } from './services/password-recovery.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from '../users/entities/user.entity';
 import { UserProfile } from '../users/entities/user-profile.entity';
+import { RegistrationVerificationCode } from './entities/registration-verification-code.entity';
+import { RegistrationVerificationService } from './registration/registration-verification.service';
+import { TwilioWhatsappService } from './registration/twilio-whatsapp.service';
 
 @Module({
   imports: [
@@ -41,7 +44,7 @@ import { UserProfile } from '../users/entities/user-profile.entity';
     UsersModule,
     TypeOrmModule.forFeature([
       RegistrationSession,
-      RegistrationVerification,
+      RegistrationVerificationCode,
       User,
       UserProfile,
       MfaChallenge,
