@@ -107,4 +107,10 @@ export const envValidationSchema = Joi.object({
     then: Joi.string().min(32).required(),
     otherwise: Joi.string().min(8).default('dev-recipient-identity-pepper'),
   }),
+
+  /** When true, `POST .../broker-a/decline` requires a non-empty decline reason. */
+  BROKER_A_DECLINE_REASON_REQUIRED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 }).unknown(true);
