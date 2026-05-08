@@ -12,7 +12,6 @@ import * as bcrypt from 'bcrypt';
 import { DataSource, Repository } from 'typeorm';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { ApprovalRequestStatus } from '../../../common/enums/approval-request-status.enum';
-import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { normalizeEmail } from '../../../common/utils/normalization.util';

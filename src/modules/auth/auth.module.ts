@@ -15,8 +15,6 @@ import { RegistrationSession } from './entities/registration-session.entity';
 import { RegistrationVerification } from './entities/registration-verification.entity';
 import { SendgridEmailService } from './email/sendgrid-email.service';
 import { RegistrationService } from './registration/registration.service';
-import { RegistrationVerificationService } from './registration/registration-verification.service';
-import { TwilioWhatsappService } from './registration/twilio-whatsapp.service';
 import { AuthLoginService } from './services/auth-login.service';
 import { AuthTokensService } from './services/auth-tokens.service';
 import { MfaChallengeService } from './services/mfa-challenge.service';

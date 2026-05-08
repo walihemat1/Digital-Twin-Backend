@@ -97,4 +97,14 @@ export const envValidationSchema = Joi.object({
   TWILIO_ACCOUNT_SID: Joi.string().allow('').optional(),
   TWILIO_AUTH_TOKEN: Joi.string().allow('').optional(),
   TWILIO_FROM_NUMBER: Joi.string().allow('').optional(),
+
+  /**
+   * Pepper for deriving AES-256-GCM keys for `recipients.identification_number_encrypted`.
+   * In production, use a long random secret (managed outside the repo).
+   */
+  RECIPIENT_IDENTITY_ENCRYPTION_KEY: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(32).required(),
+    otherwise: Joi.string().min(8).default('dev-recipient-identity-pepper'),
+  }),
 }).unknown(true);

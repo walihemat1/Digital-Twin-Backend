@@ -37,10 +37,24 @@ export class RegistrationVerificationService {
     private readonly auth: ConfigType<typeof authConfig>,
   ) {}
 
-  async sendWhatsappCode(session: RegistrationSession): Promise<{
+  private async resolveSession(
+    sessionOrId: RegistrationSession | string,
+  ): Promise<RegistrationSession> {
+    if (typeof sessionOrId !== 'string') {
+      return sessionOrId;
+    }
+    const session = await this.sessions.findOne({ where: { id: sessionOrId } });
+    if (!session) {
+      throw new NotFoundException('Registration session not found.');
+    }
+    return session;
+  }
+
+  async sendWhatsappCode(sessionOrId: RegistrationSession | string): Promise<{
     expiresAt: string;
     resendCount: number;
   }> {
+    const session = await this.resolveSession(sessionOrId);
     const number =
       (session.contactPayload as { normalizedWhatsappNumber?: string } | null)
         ?.normalizedWhatsappNumber;
@@ -54,14 +68,15 @@ export class RegistrationVerificationService {
     );
   }
 
-  async resendWhatsappCode(session: RegistrationSession) {
-    return this.sendWhatsappCode(session);
+  async resendWhatsappCode(sessionOrId: RegistrationSession | string) {
+    return this.sendWhatsappCode(sessionOrId);
   }
 
   async verifyWhatsappCode(
-    session: RegistrationSession,
+    sessionOrId: RegistrationSession | string,
     code: string,
   ): Promise<{ verifiedAt: string }> {
+    const session = await this.resolveSession(sessionOrId);
     return this.verifyCode(
       session,
       NotificationChannel.WHATSAPP,
@@ -79,10 +94,11 @@ export class RegistrationVerificationService {
     );
   }
 
-  async sendEmailCode(session: RegistrationSession): Promise<{
+  async sendEmailCode(sessionOrId: RegistrationSession | string): Promise<{
     expiresAt: string;
     resendCount: number;
   }> {
+    const session = await this.resolveSession(sessionOrId);
     const personal =
       session.personalInfoPayload as { email?: string; firstName?: string } | null;
     if (!personal?.email || !personal.firstName) {
@@ -95,14 +111,15 @@ export class RegistrationVerificationService {
     );
   }
 
-  async resendEmailCode(session: RegistrationSession) {
-    return this.sendEmailCode(session);
+  async resendEmailCode(sessionOrId: RegistrationSession | string) {
+    return this.sendEmailCode(sessionOrId);
   }
 
   async verifyEmailCode(
-    session: RegistrationSession,
+    sessionOrId: RegistrationSession | string,
     code: string,
   ): Promise<{ verifiedAt: string }> {
+    const session = await this.resolveSession(sessionOrId);
     return this.verifyCode(
       session,
       NotificationChannel.EMAIL,

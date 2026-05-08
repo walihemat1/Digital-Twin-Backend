@@ -6,6 +6,7 @@ import { BadRequestException } from '@nestjs/common';
  * - Otherwise combines a country code with a local/national number.
  * - Strips formatting characters and guards against duplicate country codes.
  */
+
 export function buildNormalizedWhatsappNumber(
   whatsappCountryCode: string,
   whatsappNumber: string,
