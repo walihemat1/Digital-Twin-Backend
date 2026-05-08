@@ -17,12 +17,19 @@ import { TransactionsService } from './transactions.service';
 describe('TransactionsService', () => {
   let service: TransactionsService;
   let dataSource: { transaction: jest.Mock };
-  let txRepo: jest.Mocked<Pick<Repository<Transaction>, 'find' | 'findOne'>>;
-  let histRepo: jest.Mocked<Pick<Repository<TransactionStatusHistory>, 'find'>>;
+  let txRepo: jest.Mocked<Pick<Repository<Transaction>, 'find' | 'findOne' | 'save'>>;
+  let histRepo: jest.Mocked<
+    Pick<Repository<TransactionStatusHistory>, 'find' | 'save'>
+  >;
   let usersRepo: jest.Mocked<Pick<Repository<User>, 'findOne'>>;
   let recipientsRepo: jest.Mocked<
     Pick<RecipientsRepository, 'findEligibleForTransactionById'>
   >;
+  let configSvc: { get: jest.Mock };
+  let workflowHooks: {
+    onBrokerAAccepted: jest.Mock;
+    onBrokerADeclined: jest.Mock;
+  };
 
   const auth = { userId: 'coord-1', role: UserRole.COORDINATOR_SENDER };
 
@@ -35,12 +42,17 @@ describe('TransactionsService', () => {
   };
 
   beforeEach(() => {
-    txRepo = { find: jest.fn(), findOne: jest.fn() };
-    histRepo = { find: jest.fn() };
+    txRepo = { find: jest.fn(), findOne: jest.fn(), save: jest.fn() };
+    histRepo = { find: jest.fn(), save: jest.fn() };
     usersRepo = { findOne: jest.fn() };
     recipientsRepo = { findEligibleForTransactionById: jest.fn() };
     dataSource = {
       transaction: jest.fn(),
+    };
+    configSvc = { get: jest.fn().mockReturnValue(false) };
+    workflowHooks = {
+      onBrokerAAccepted: jest.fn().mockResolvedValue(undefined),
+      onBrokerADeclined: jest.fn().mockResolvedValue(undefined),
     };
 
     service = new TransactionsService(
@@ -49,6 +61,8 @@ describe('TransactionsService', () => {
       histRepo as any,
       usersRepo as any,
       recipientsRepo as any,
+      configSvc as any,
+      workflowHooks as any,
     );
   });
 
@@ -341,6 +355,297 @@ describe('TransactionsService', () => {
       expect(out.id).toBe('t1');
       expect(out.broker_a_user_id).toBe(brokerAuth.userId);
       expect(out.status_history).toHaveLength(1);
+    });
+  });
+
+  describe('Broker A accept / decline', () => {
+    const brokerAuth = { userId: 'broker-1', role: UserRole.BROKER_A };
+
+    const pendingTransaction = () =>
+      Object.assign(new Transaction(), {
+        id: 't1',
+        coordinatorId: 'c1',
+        recipientId: 'r1',
+        brokerAUserId: brokerAuth.userId,
+        transferMethod: 'bank',
+        verificationMethod: 'sms',
+        description: null,
+        status: TransactionStatus.PENDING,
+        currentStage: null,
+        amount: '10.00',
+        currency: 'USD',
+        submittedAt: new Date(),
+        deliveryConfirmedAt: null,
+        completedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+    it('brokerAAccept rejects non-Broker A', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.COORDINATOR_SENDER,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      await expect(service.brokerAAccept(brokerAuth, 't1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('brokerAAccept returns NotFound when transaction is not assigned to this broker', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(null),
+        save: jest.fn(),
+      };
+      const histRepoMock = {
+        create: jest.fn(),
+        save: jest.fn(),
+        find: jest.fn(),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      await expect(service.brokerAAccept(brokerAuth, 'missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(workflowHooks.onBrokerAAccepted).not.toHaveBeenCalled();
+    });
+
+    it('brokerAAccept rejects when status is not pending', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = pendingTransaction();
+      tx.status = TransactionStatus.BROKER_A_ACCEPTED;
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(tx),
+        save: jest.fn(),
+      };
+      const histRepoMock = {
+        create: jest.fn(),
+        save: jest.fn(),
+        find: jest.fn(),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      await expect(service.brokerAAccept(brokerAuth, 't1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(txRepoMock.save).not.toHaveBeenCalled();
+      expect(workflowHooks.onBrokerAAccepted).not.toHaveBeenCalled();
+    });
+
+    it('brokerAAccept updates status, appends history, and invokes hook', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const pending = pendingTransaction();
+      const accepted = Object.assign(new Transaction(), {
+        ...pending,
+        status: TransactionStatus.BROKER_A_ACCEPTED,
+      });
+
+      const histInitial = Object.assign(new TransactionStatusHistory(), {
+        id: 'h0',
+        transactionId: 't1',
+        fromStatus: null,
+        toStatus: TransactionStatus.PENDING,
+        changedByUserId: 'c1',
+        changeReason: null,
+        createdAt: new Date('2026-05-01T00:00:00.000Z'),
+      });
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(pending),
+        save: jest.fn().mockResolvedValue(accepted),
+      };
+      const histRepoMock = {
+        create: jest.fn((v) => Object.assign(new TransactionStatusHistory(), v)),
+        save: jest.fn().mockImplementation((h) => Promise.resolve(h)),
+        find: jest.fn().mockResolvedValue([
+          histInitial,
+          Object.assign(new TransactionStatusHistory(), {
+            id: 'h1',
+            transactionId: 't1',
+            fromStatus: TransactionStatus.PENDING,
+            toStatus: TransactionStatus.BROKER_A_ACCEPTED,
+            changedByUserId: brokerAuth.userId,
+            changeReason: null,
+            createdAt: new Date('2026-05-01T01:00:00.000Z'),
+          }),
+        ]),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      const out = await service.brokerAAccept(brokerAuth, 't1');
+
+      expect(out.status).toBe(TransactionStatus.BROKER_A_ACCEPTED);
+      expect(out.status_history).toHaveLength(2);
+      expect(out.status_history[1].to_status).toBe(TransactionStatus.BROKER_A_ACCEPTED);
+      expect(out.status_history[1].from_status).toBe(TransactionStatus.PENDING);
+      expect(out.status_history[1].changed_by_user_id).toBe(brokerAuth.userId);
+      expect(workflowHooks.onBrokerAAccepted).toHaveBeenCalledWith(accepted);
+    });
+
+    it('brokerADecline rejects when decline reason is required by policy and missing', async () => {
+      configSvc.get.mockReturnValue(true);
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      await expect(
+        service.brokerADecline(brokerAuth, 't1', { reason: '   ' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('brokerADecline rejects when status is not pending', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = pendingTransaction();
+      tx.status = TransactionStatus.BROKER_A_DECLINED;
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(tx),
+        save: jest.fn(),
+      };
+      const histRepoMock = {
+        create: jest.fn(),
+        save: jest.fn(),
+        find: jest.fn(),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      await expect(
+        service.brokerADecline(brokerAuth, 't1', { reason: 'no capacity' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(workflowHooks.onBrokerADeclined).not.toHaveBeenCalled();
+    });
+
+    it('brokerADecline stores reason on history when provided', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const pending = pendingTransaction();
+      const declined = Object.assign(new Transaction(), {
+        ...pending,
+        status: TransactionStatus.BROKER_A_DECLINED,
+      });
+
+      const histInitial = Object.assign(new TransactionStatusHistory(), {
+        id: 'h0',
+        transactionId: 't1',
+        fromStatus: null,
+        toStatus: TransactionStatus.PENDING,
+        changedByUserId: 'c1',
+        changeReason: null,
+        createdAt: new Date(),
+      });
+
+      const declineHist = Object.assign(new TransactionStatusHistory(), {
+        id: 'h1',
+        transactionId: 't1',
+        fromStatus: TransactionStatus.PENDING,
+        toStatus: TransactionStatus.BROKER_A_DECLINED,
+        changedByUserId: brokerAuth.userId,
+        changeReason: 'Cannot fulfill this corridor',
+        createdAt: new Date(),
+      });
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(pending),
+        save: jest.fn().mockResolvedValue(declined),
+      };
+      const histRepoMock = {
+        create: jest.fn((v) => Object.assign(new TransactionStatusHistory(), v)),
+        save: jest.fn().mockImplementation((h) => Promise.resolve(h)),
+        find: jest.fn().mockResolvedValue([histInitial, declineHist]),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      const out = await service.brokerADecline(brokerAuth, 't1', {
+        reason: 'Cannot fulfill this corridor',
+      });
+
+      expect(out.status).toBe(TransactionStatus.BROKER_A_DECLINED);
+      expect(out.status_history[1].change_reason).toBe('Cannot fulfill this corridor');
+      expect(workflowHooks.onBrokerADeclined).toHaveBeenCalledWith(
+        declined,
+        'Cannot fulfill this corridor',
+      );
     });
   });
 });

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AccountStatus } from '../../common/enums/account-status.enum';
@@ -12,9 +13,11 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { User } from '../users/entities/user.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
+import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
+import { TransactionWorkflowHooks } from './transaction-workflow.hooks';
 
 export type TransactionStatusHistoryView = {
   id: string;
@@ -59,6 +62,8 @@ export class TransactionsService {
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly recipients: RecipientsRepository,
+    private readonly config: ConfigService,
+    private readonly workflowHooks: TransactionWorkflowHooks,
   ) {}
 
   private assertFundsAccess(actor: User): void {
@@ -78,6 +83,15 @@ export class TransactionsService {
     if (actor.accountStatus !== AccountStatus.ACTIVE) {
       throw new ForbiddenException('Account is not approved for this action.');
     }
+  }
+
+  private isBrokerADeclineReasonRequired(): boolean {
+    return this.config.get<boolean>('transactionWorkflow.brokerADeclineReasonRequired', false);
+  }
+
+  private normalizeDeclineReason(dto?: BrokerADeclineDto): string | null {
+    const raw = dto?.reason?.trim();
+    return raw && raw.length > 0 ? raw : null;
   }
 
   private toHistoryView(row: TransactionStatusHistory): TransactionStatusHistoryView {
@@ -286,5 +300,117 @@ export class TransactionsService {
     });
 
     return this.toDetail(tx, history);
+  }
+
+  async brokerAAccept(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerAReadAccess(actor);
+
+    let savedForHook!: Transaction;
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId, brokerAUserId: authUser.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      if (row.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(
+          'Only a pending transaction assigned to you can be accepted.',
+        );
+      }
+
+      row.status = TransactionStatus.BROKER_A_ACCEPTED;
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.PENDING,
+        toStatus: TransactionStatus.BROKER_A_ACCEPTED,
+        changedByUserId: authUser.userId,
+        changeReason: null,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory);
+    });
+
+    await this.workflowHooks.onBrokerAAccepted(savedForHook);
+    return detail;
+  }
+
+  async brokerADecline(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+    dto?: BrokerADeclineDto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerAReadAccess(actor);
+
+    const reason = this.normalizeDeclineReason(dto);
+    if (this.isBrokerADeclineReasonRequired() && !reason) {
+      throw new BadRequestException('Decline reason is required.');
+    }
+
+    let savedForHook!: Transaction;
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId, brokerAUserId: authUser.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      if (row.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(
+          'Only a pending transaction assigned to you can be declined.',
+        );
+      }
+
+      row.status = TransactionStatus.BROKER_A_DECLINED;
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.PENDING,
+        toStatus: TransactionStatus.BROKER_A_DECLINED,
+        changedByUserId: authUser.userId,
+        changeReason: reason,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory);
+    });
+
+    await this.workflowHooks.onBrokerADeclined(savedForHook, reason);
+    return detail;
   }
 }

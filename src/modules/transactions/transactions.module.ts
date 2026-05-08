@@ -5,6 +5,7 @@ import { User } from '../users/entities/user.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
 import { TransactionsController } from './transactions.controller';
+import { TransactionWorkflowHooks } from './transaction-workflow.hooks';
 import { TransactionsService } from './transactions.service';
 
 @Module({
@@ -13,7 +14,7 @@ import { TransactionsService } from './transactions.service';
     RecipientsModule,
   ],
   controllers: [TransactionsController],
-  providers: [TransactionsService],
+  providers: [TransactionsService, TransactionWorkflowHooks],
   exports: [TransactionsService],
 })
 export class TransactionsModule {}
