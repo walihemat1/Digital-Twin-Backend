@@ -14,7 +14,9 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { User } from '../users/entities/user.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
+import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
+import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
 import { TransactionWorkflowHooks } from './transaction-workflow.hooks';
@@ -411,6 +413,85 @@ export class TransactionsService {
     });
 
     await this.workflowHooks.onBrokerADeclined(savedForHook, reason);
+    return detail;
+  }
+
+  async brokerASubmitLocalAgentDetails(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+    dto: BrokerALocalAgentDetailsDto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerAReadAccess(actor);
+
+    const forwardingStr = dto.forwardingValue.toFixed(2);
+    let savedForHook!: Transaction;
+
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+      const detailRepo = manager.getRepository(BrokerALocalAgentDetail);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId, brokerAUserId: authUser.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      if (row.status !== TransactionStatus.BROKER_A_ACCEPTED) {
+        throw new BadRequestException(
+          'Local agent details can only be submitted after acceptance and while the transaction is awaiting your forwarding details.',
+        );
+      }
+
+      const existing = await detailRepo.findOne({
+        where: { transactionId: row.id },
+      });
+      if (existing) {
+        throw new BadRequestException(
+          'Local agent details have already been submitted for this transaction.',
+        );
+      }
+
+      const submittedAt = new Date();
+      const detailRow = detailRepo.create({
+        transactionId: row.id,
+        organizationName: dto.organizationName,
+        forwardingValue: forwardingStr,
+        localAgentName: dto.localAgentName,
+        localAgentPhone: dto.localAgentPhone,
+        coordinationMethod: dto.coordinationMethod,
+        submittedBy: authUser.userId,
+        submittedAt,
+      });
+      await detailRepo.save(detailRow);
+
+      row.status = TransactionStatus.AWAITING_BROKER_B;
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.BROKER_A_ACCEPTED,
+        toStatus: TransactionStatus.AWAITING_BROKER_B,
+        changedByUserId: authUser.userId,
+        changeReason: null,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory);
+    });
+
+    await this.workflowHooks.onBrokerAReadyForBrokerB(savedForHook);
     return detail;
   }
 }

@@ -10,6 +10,7 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { VerificationStatus } from '../../common/enums/verification-status.enum';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { User } from '../users/entities/user.entity';
+import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
 import { TransactionsService } from './transactions.service';
@@ -29,6 +30,7 @@ describe('TransactionsService', () => {
   let workflowHooks: {
     onBrokerAAccepted: jest.Mock;
     onBrokerADeclined: jest.Mock;
+    onBrokerAReadyForBrokerB: jest.Mock;
   };
 
   const auth = { userId: 'coord-1', role: UserRole.COORDINATOR_SENDER };
@@ -53,6 +55,7 @@ describe('TransactionsService', () => {
     workflowHooks = {
       onBrokerAAccepted: jest.fn().mockResolvedValue(undefined),
       onBrokerADeclined: jest.fn().mockResolvedValue(undefined),
+      onBrokerAReadyForBrokerB: jest.fn().mockResolvedValue(undefined),
     };
 
     service = new TransactionsService(
@@ -646,6 +649,194 @@ describe('TransactionsService', () => {
         declined,
         'Cannot fulfill this corridor',
       );
+    });
+  });
+
+  describe('Broker A local agent details', () => {
+    const brokerAuth = { userId: 'broker-1', role: UserRole.BROKER_A };
+
+    const acceptedTransaction = () =>
+      Object.assign(new Transaction(), {
+        id: 't1',
+        coordinatorId: 'c1',
+        recipientId: 'r1',
+        brokerAUserId: brokerAuth.userId,
+        transferMethod: 'bank',
+        verificationMethod: 'sms',
+        description: null,
+        status: TransactionStatus.BROKER_A_ACCEPTED,
+        currentStage: null,
+        amount: '10.00',
+        currency: 'USD',
+        submittedAt: new Date(),
+        deliveryConfirmedAt: null,
+        completedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+    const validDto = {
+      organizationName: 'Acme Corp',
+      forwardingValue: 250.5,
+      localAgentName: 'Jane Agent',
+      localAgentPhone: '+15551234567',
+      coordinationMethod: 'WhatsApp',
+    };
+
+    it('brokerASubmitLocalAgentDetails rejects when transaction is still pending', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const pending = acceptedTransaction();
+      pending.status = TransactionStatus.PENDING;
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(pending),
+        save: jest.fn(),
+      };
+      const histRepoMock = { create: jest.fn(), save: jest.fn(), find: jest.fn() };
+      const detailRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      await expect(
+        service.brokerASubmitLocalAgentDetails(brokerAuth, 't1', validDto as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(detailRepoMock.save).not.toHaveBeenCalled();
+      expect(workflowHooks.onBrokerAReadyForBrokerB).not.toHaveBeenCalled();
+    });
+
+    it('brokerASubmitLocalAgentDetails rejects when already awaiting Broker B', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const forwarded = acceptedTransaction();
+      forwarded.status = TransactionStatus.AWAITING_BROKER_B;
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(forwarded),
+        save: jest.fn(),
+      };
+      const histRepoMock = { create: jest.fn(), save: jest.fn(), find: jest.fn() };
+      const detailRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      await expect(
+        service.brokerASubmitLocalAgentDetails(brokerAuth, 't1', validDto as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(workflowHooks.onBrokerAReadyForBrokerB).not.toHaveBeenCalled();
+    });
+
+    it('brokerASubmitLocalAgentDetails persists details, transitions status, and invokes hook', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const accepted = acceptedTransaction();
+      const awaiting = Object.assign(new Transaction(), {
+        ...accepted,
+        status: TransactionStatus.AWAITING_BROKER_B,
+      });
+
+      const histPending = Object.assign(new TransactionStatusHistory(), {
+        id: 'h0',
+        transactionId: 't1',
+        fromStatus: null,
+        toStatus: TransactionStatus.PENDING,
+        changedByUserId: 'c1',
+        changeReason: null,
+        createdAt: new Date('2026-05-01T00:00:00.000Z'),
+      });
+      const histAccepted = Object.assign(new TransactionStatusHistory(), {
+        id: 'h1',
+        transactionId: 't1',
+        fromStatus: TransactionStatus.PENDING,
+        toStatus: TransactionStatus.BROKER_A_ACCEPTED,
+        changedByUserId: brokerAuth.userId,
+        changeReason: null,
+        createdAt: new Date('2026-05-01T01:00:00.000Z'),
+      });
+      const histAwaiting = Object.assign(new TransactionStatusHistory(), {
+        id: 'h2',
+        transactionId: 't1',
+        fromStatus: TransactionStatus.BROKER_A_ACCEPTED,
+        toStatus: TransactionStatus.AWAITING_BROKER_B,
+        changedByUserId: brokerAuth.userId,
+        changeReason: null,
+        createdAt: new Date('2026-05-01T02:00:00.000Z'),
+      });
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(accepted),
+        save: jest.fn().mockResolvedValue(awaiting),
+      };
+      const detailRepoMock = {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn((v) => Object.assign(new BrokerALocalAgentDetail(), v)),
+        save: jest.fn().mockImplementation((d) => Promise.resolve(d)),
+      };
+      const histRepoMock = {
+        create: jest.fn((v) => Object.assign(new TransactionStatusHistory(), v)),
+        save: jest.fn().mockImplementation((h) => Promise.resolve(h)),
+        find: jest.fn().mockResolvedValue([histPending, histAccepted, histAwaiting]),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      const out = await service.brokerASubmitLocalAgentDetails(
+        brokerAuth,
+        't1',
+        validDto as any,
+      );
+
+      expect(out.status).toBe(TransactionStatus.AWAITING_BROKER_B);
+      expect(out.status_history).toHaveLength(3);
+      expect(out.status_history[2].to_status).toBe(TransactionStatus.AWAITING_BROKER_B);
+      expect(out.status_history[2].from_status).toBe(TransactionStatus.BROKER_A_ACCEPTED);
+      expect(detailRepoMock.save).toHaveBeenCalled();
+      const savedDetail = detailRepoMock.save.mock.calls[0][0] as BrokerALocalAgentDetail;
+      expect(savedDetail.forwardingValue).toBe('250.50');
+      expect(savedDetail.submittedBy).toBe(brokerAuth.userId);
+      expect(workflowHooks.onBrokerAReadyForBrokerB).toHaveBeenCalledWith(awaiting);
     });
   });
 });
