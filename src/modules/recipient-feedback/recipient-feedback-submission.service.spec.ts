@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -169,6 +173,41 @@ describe('RecipientFeedbackSubmissionService', () => {
           changedByUserId: null,
         }),
       );
+    });
+
+    it('rejects when transaction is already finalized', async () => {
+      const tx = deliveredTx();
+      feedbackAccess.resolveActiveFeedbackToken.mockResolvedValue({
+        transaction: tx,
+        recipientId: tx.recipientId,
+      });
+
+      const txRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          ...tx,
+          status: TransactionStatus.COMPLETED,
+        }),
+        save: jest.fn(),
+      };
+
+      dataSource.transaction.mockImplementation(
+        async (fn: (m: unknown) => Promise<unknown>) => {
+          const manager = {
+            getRepository: (ent: unknown) => {
+              if (ent === Transaction) return txRepo;
+              throw new Error(`unexpected entity ${String(ent)}`);
+            },
+          };
+          return fn(manager);
+        },
+      );
+
+      await expect(
+        service.submitFeedback('tok', {
+          actualAmountReceived: 10,
+        } as SubmitRecipientFeedbackDto),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(txRepo.save).not.toHaveBeenCalled();
     });
 
     it('conflicts when feedback row exists inside the transaction', async () => {

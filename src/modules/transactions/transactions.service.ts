@@ -17,11 +17,14 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { User } from '../users/entities/user.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { assertTransactionAwaitingBrokerBDeliveryConfirmation } from './broker-b-delivery.rules';
+import { assertMajorWorkflowFieldsUnlocked } from './transaction-workflow-lock.rules';
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { BrokerBConfirmDeliveryDto } from './dto/broker-b-confirm-delivery.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
+import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
+import { CoordinatorAffirmation } from './entities/coordinator-affirmation.entity';
 import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
 import { TransactionBrokerBAssignment } from './entities/transaction-broker-b-assignment.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
@@ -65,6 +68,17 @@ export type TransactionSummaryView = {
   updated_at: Date;
 };
 
+export type RecipientFeedbackDetailView = {
+  feedback_comment: string | null;
+  actual_amount_received: string;
+  submitted_at: Date;
+};
+
+export type CoordinatorAffirmationDetailView = {
+  coordinator_comment: string | null;
+  affirmed_at: Date;
+};
+
 export type TransactionDetailView = TransactionSummaryView & {
   transfer_method: string;
   verification_method: string;
@@ -73,6 +87,8 @@ export type TransactionDetailView = TransactionSummaryView & {
   delivery_confirmed_at: Date | null;
   completed_at: Date | null;
   status_history: TransactionStatusHistoryView[];
+  recipient_feedback: RecipientFeedbackDetailView | null;
+  coordinator_affirmation: CoordinatorAffirmationDetailView | null;
 };
 
 @Injectable()
@@ -85,6 +101,10 @@ export class TransactionsService {
     private readonly statusHistory: Repository<TransactionStatusHistory>,
     @InjectRepository(TransactionBrokerBAssignment)
     private readonly brokerBAssignments: Repository<TransactionBrokerBAssignment>,
+    @InjectRepository(RecipientFeedback)
+    private readonly recipientFeedback: Repository<RecipientFeedback>,
+    @InjectRepository(CoordinatorAffirmation)
+    private readonly coordinatorAffirmations: Repository<CoordinatorAffirmation>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly recipients: RecipientsRepository,
@@ -159,7 +179,13 @@ export class TransactionsService {
   private toDetail(
     tx: Transaction,
     history: TransactionStatusHistory[],
+    extras?: {
+      recipientFeedback: RecipientFeedback | null;
+      coordinatorAffirmation: CoordinatorAffirmation | null;
+    },
   ): TransactionDetailView {
+    const rf = extras?.recipientFeedback;
+    const ca = extras?.coordinatorAffirmation;
     return {
       ...this.toSummary(tx),
       transfer_method: tx.transferMethod,
@@ -169,6 +195,19 @@ export class TransactionsService {
       delivery_confirmed_at: tx.deliveryConfirmedAt,
       completed_at: tx.completedAt,
       status_history: history.map((h) => this.toHistoryView(h)),
+      recipient_feedback: rf
+        ? {
+            feedback_comment: rf.feedbackComment,
+            actual_amount_received: rf.actualAmountReceived,
+            submitted_at: rf.submittedAt,
+          }
+        : null,
+      coordinator_affirmation: ca
+        ? {
+            coordinator_comment: ca.coordinatorComment,
+            affirmed_at: ca.affirmedAt,
+          }
+        : null,
     };
   }
 
@@ -289,7 +328,17 @@ export class TransactionsService {
       order: { createdAt: 'ASC' },
     });
 
-    return this.toDetail(tx, history);
+    const feedback = await this.recipientFeedback.findOne({
+      where: { transactionId: tx.id },
+    });
+    const affirmation = await this.coordinatorAffirmations.findOne({
+      where: { transactionId: tx.id },
+    });
+
+    return this.toDetail(tx, history, {
+      recipientFeedback: feedback,
+      coordinatorAffirmation: affirmation,
+    });
   }
 
   async listForBrokerA(
@@ -434,6 +483,7 @@ export class TransactionsService {
       if (!row) {
         throw new NotFoundException('Transaction not found.');
       }
+      assertMajorWorkflowFieldsUnlocked(row);
       if (row.status !== TransactionStatus.PENDING) {
         throw new BadRequestException(
           'Only a pending transaction assigned to you can be accepted.',
@@ -493,6 +543,7 @@ export class TransactionsService {
       if (!row) {
         throw new NotFoundException('Transaction not found.');
       }
+      assertMajorWorkflowFieldsUnlocked(row);
       if (row.status !== TransactionStatus.PENDING) {
         throw new BadRequestException(
           'Only a pending transaction assigned to you can be declined.',
@@ -550,6 +601,7 @@ export class TransactionsService {
       if (!row) {
         throw new NotFoundException('Transaction not found.');
       }
+      assertMajorWorkflowFieldsUnlocked(row);
       if (row.status !== TransactionStatus.BROKER_A_ACCEPTED) {
         throw new BadRequestException(
           'Local agent details can only be submitted after acceptance and while the transaction is awaiting your forwarding details.',
@@ -631,6 +683,7 @@ export class TransactionsService {
       if (!row) {
         throw new NotFoundException('Transaction not found.');
       }
+      assertMajorWorkflowFieldsUnlocked(row);
 
       const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
       const assignment = await assignRepo.findOne({

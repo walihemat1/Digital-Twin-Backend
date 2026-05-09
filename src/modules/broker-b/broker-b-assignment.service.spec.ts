@@ -115,6 +115,25 @@ describe('BrokerBAssignmentService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('assign rejects finalized transactions', async () => {
+    usersRepo.findOne.mockResolvedValue({
+      id: coordinatorAuth.userId,
+      role: UserRole.COORDINATOR_SENDER,
+      accountStatus: AccountStatus.ACTIVE,
+    } as User);
+
+    const tx = awaitingTx();
+    tx.status = TransactionStatus.COMPLETED;
+    txRepo.findOne.mockResolvedValue(tx);
+
+    await expect(
+      service.assign(coordinatorAuth, 't1', {
+        assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+        internalUserId: '550e8400-e29b-41d4-a716-446655440000',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('assign rejects when status is not awaiting Broker B', async () => {
     usersRepo.findOne.mockResolvedValue({
       id: coordinatorAuth.userId,
