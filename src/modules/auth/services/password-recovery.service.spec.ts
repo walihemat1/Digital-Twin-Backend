@@ -29,10 +29,18 @@ describe('PasswordRecoveryService', () => {
     opaqueTokenPepper: 'test-pepper-32-chars-minimum-ok',
     mfaCodeTtlSeconds: 600,
     passwordResetTtlSeconds: 3600,
+    feedbackAccessTokenTtlSeconds: 604800,
+    regVerificationCodeTtlSeconds: 600,
+    regVerificationMaxAttempts: 5,
+    regVerificationMaxResends: 3,
+    regVerificationResendCooldownSeconds: 60,
     frontendAppBaseUrl: 'https://app.example.com',
     passwordResetPath: '/reset',
     sendgridApiKey: 'k',
     emailFrom: 'f@e.com',
+    twilioAccountSid: '',
+    twilioAuthToken: '',
+    twilioFromNumber: '',
   };
 
   let service: PasswordRecoveryService;
