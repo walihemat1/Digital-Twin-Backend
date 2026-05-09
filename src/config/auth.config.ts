@@ -19,6 +19,10 @@ const authConfig = registerAs('auth', () => ({
   passwordResetTtlSeconds: Number(
     process.env.PASSWORD_RESET_TTL_SECONDS ?? 3600,
   ),
+  /** Lifetime for recipient feedback URL tokens (non-login access). */
+  feedbackAccessTokenTtlSeconds: Number(
+    process.env.FEEDBACK_ACCESS_TOKEN_TTL_SECONDS ?? 604800,
+  ),
   regVerificationCodeTtlSeconds: Number(
     process.env.REG_VERIFICATION_CODE_TTL_SECONDS ?? 600,
   ),

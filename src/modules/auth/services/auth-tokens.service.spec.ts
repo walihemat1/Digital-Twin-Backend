@@ -50,10 +50,18 @@ describe('AuthTokensService (refreshSession)', () => {
     opaqueTokenPepper: 'pepper-32-chars--abcdefghij',
     mfaCodeTtlSeconds: 600,
     passwordResetTtlSeconds: 3600,
+    feedbackAccessTokenTtlSeconds: 604800,
+    regVerificationCodeTtlSeconds: 600,
+    regVerificationMaxAttempts: 5,
+    regVerificationMaxResends: 3,
+    regVerificationResendCooldownSeconds: 60,
     frontendAppBaseUrl: 'http://x',
     passwordResetPath: '/p',
     sendgridApiKey: '',
     emailFrom: '',
+    twilioAccountSid: '',
+    twilioAuthToken: '',
+    twilioFromNumber: '',
   };
 
   let service: AuthTokensService;

@@ -35,10 +35,18 @@ describe('MfaChallengeService (verifyMfa)', () => {
     opaqueTokenPepper: 'pepper',
     mfaCodeTtlSeconds: 600,
     passwordResetTtlSeconds: 3600,
+    feedbackAccessTokenTtlSeconds: 604800,
+    regVerificationCodeTtlSeconds: 600,
+    regVerificationMaxAttempts: 5,
+    regVerificationMaxResends: 3,
+    regVerificationResendCooldownSeconds: 60,
     frontendAppBaseUrl: 'http://localhost',
     passwordResetPath: '/r',
     sendgridApiKey: '',
     emailFrom: '',
+    twilioAccountSid: '',
+    twilioAuthToken: '',
+    twilioFromNumber: '',
   };
 
   beforeEach(async () => {
