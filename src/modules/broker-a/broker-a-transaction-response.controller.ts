@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { BrokerADeclineDto } from '../transactions/dto/broker-a-decline.dto';
+import { BrokerALocalAgentDetailsDto } from '../transactions/dto/broker-a-local-agent-details.dto';
 import { TransactionsService } from '../transactions/transactions.service';
 
 /**
@@ -40,5 +41,14 @@ export class BrokerATransactionResponseController {
     @Body(new DefaultValuePipe({})) body: BrokerADeclineDto,
   ) {
     return this.transactions.brokerADecline(user, id, body);
+  }
+
+  @Post(':id/broker-a/local-agent-details')
+  submitLocalAgentDetails(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() body: BrokerALocalAgentDetailsDto,
+  ) {
+    return this.transactions.brokerASubmitLocalAgentDetails(user, id, body);
   }
 }

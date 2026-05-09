@@ -20,4 +20,10 @@ export class TransactionWorkflowHooks {
       this.logger.debug('onBrokerADeclined (no-op hook)');
     }
   }
+
+  async onBrokerAReadyForBrokerB(_tx: Transaction): Promise<void> {
+    if (process.env.NODE_ENV !== 'test') {
+      this.logger.debug('onBrokerAReadyForBrokerB (no-op hook)');
+    }
+  }
 }
