@@ -7,6 +7,7 @@ import {
 import { DataSource } from 'typeorm';
 import { TransactionStatus } from '../../common/enums/transaction-status.enum';
 import { Transaction } from '../transactions/entities/transaction.entity';
+import { assertMajorWorkflowFieldsUnlocked } from '../transactions/transaction-workflow-lock.rules';
 import { TransactionStatusHistory } from '../transactions/entities/transaction-status-history.entity';
 import { SubmitRecipientFeedbackDto } from './dto/submit-recipient-feedback.dto';
 import { RecipientFeedback } from './entities/recipient-feedback.entity';
@@ -79,6 +80,8 @@ export class RecipientFeedbackSubmissionService {
           errorMessage: 'Invalid feedback link.',
         });
       }
+
+      assertMajorWorkflowFieldsUnlocked(row);
 
       if (row.status !== TransactionStatus.DELIVERED) {
         if (row.status === TransactionStatus.FEEDBACK_SUBMITTED) {

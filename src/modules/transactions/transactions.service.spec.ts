@@ -11,8 +11,10 @@ import { BrokerBAssignmentType } from '../../common/enums/broker-b-assignment-ty
 import { TransactionStatus } from '../../common/enums/transaction-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { VerificationStatus } from '../../common/enums/verification-status.enum';
+import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { User } from '../users/entities/user.entity';
+import { CoordinatorAffirmation } from './entities/coordinator-affirmation.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
 import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
 import { TransactionBrokerBAssignment } from './entities/transaction-broker-b-assignment.entity';
@@ -30,6 +32,12 @@ describe('TransactionsService', () => {
   let usersRepo: jest.Mocked<Pick<Repository<User>, 'findOne'>>;
   let brokerBAssignmentsRepo: jest.Mocked<
     Pick<Repository<TransactionBrokerBAssignment>, 'findOne'>
+  >;
+  let recipientFeedbackRepo: jest.Mocked<
+    Pick<Repository<RecipientFeedback>, 'findOne'>
+  >;
+  let coordinatorAffirmationsRepo: jest.Mocked<
+    Pick<Repository<CoordinatorAffirmation>, 'findOne'>
   >;
   let recipientsRepo: jest.Mocked<
     Pick<RecipientsRepository, 'findEligibleForTransactionById'>
@@ -62,6 +70,8 @@ describe('TransactionsService', () => {
     histRepo = { find: jest.fn(), save: jest.fn() };
     usersRepo = { findOne: jest.fn() };
     brokerBAssignmentsRepo = { findOne: jest.fn() };
+    recipientFeedbackRepo = { findOne: jest.fn() };
+    coordinatorAffirmationsRepo = { findOne: jest.fn() };
     recipientsRepo = { findEligibleForTransactionById: jest.fn() };
     dataSource = {
       transaction: jest.fn(),
@@ -79,6 +89,8 @@ describe('TransactionsService', () => {
       txRepo as any,
       histRepo as any,
       brokerBAssignmentsRepo as any,
+      recipientFeedbackRepo as any,
+      coordinatorAffirmationsRepo as any,
       usersRepo as any,
       recipientsRepo as any,
       configSvc as any,
@@ -246,6 +258,8 @@ describe('TransactionsService', () => {
     expect(out.status_history).toHaveLength(1);
     expect(out.status_history[0].to_status).toBe(TransactionStatus.PENDING);
     expect(out.status_history[0].from_status).toBeNull();
+    expect(out.recipient_feedback).toBeNull();
+    expect(out.coordinator_affirmation).toBeNull();
   });
 
   describe('Broker A visibility', () => {

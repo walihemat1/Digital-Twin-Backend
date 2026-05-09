@@ -17,6 +17,7 @@ import { TransactionBrokerBAssignment } from '../transactions/entities/transacti
 import { Transaction } from '../transactions/entities/transaction.entity';
 import { User } from '../users/entities/user.entity';
 import { BrokerBAssignDto } from './dto/broker-b-assign.dto';
+import { assertMajorWorkflowFieldsUnlocked } from '../transactions/transaction-workflow-lock.rules';
 import { assertBrokerBAssignmentTargetsValid } from './broker-b-assignment.validation';
 
 export type BrokerBAssignmentView = {
@@ -92,6 +93,7 @@ export class BrokerBAssignmentService {
     if (!tx || tx.coordinatorId !== authUser.userId) {
       throw new NotFoundException('Transaction not found.');
     }
+    assertMajorWorkflowFieldsUnlocked(tx);
     if (tx.status !== TransactionStatus.AWAITING_BROKER_B) {
       throw new BadRequestException(
         'Broker B can only be assigned while the transaction is awaiting Broker B.',
