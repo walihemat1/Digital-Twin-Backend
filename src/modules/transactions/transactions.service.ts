@@ -6,7 +6,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
+import { DataSource, In, IsNull, Repository } from 'typeorm';
 import { AccountStatus } from '../../common/enums/account-status.enum';
 import { BrokerBAssignmentStatus } from '../../common/enums/broker-b-assignment-status.enum';
 import { BrokerBAssignmentType } from '../../common/enums/broker-b-assignment-type.enum';
@@ -15,10 +16,13 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { User } from '../users/entities/user.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
+import { assertTransactionAwaitingBrokerBDeliveryConfirmation } from './broker-b-delivery.rules';
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
+import { BrokerBConfirmDeliveryDto } from './dto/broker-b-confirm-delivery.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
+import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
 import { TransactionBrokerBAssignment } from './entities/transaction-broker-b-assignment.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
@@ -596,6 +600,105 @@ export class TransactionsService {
     });
 
     await this.workflowHooks.onBrokerAReadyForBrokerB(savedForHook);
+    return detail;
+  }
+
+  async brokerBConfirmDelivery(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+    dto: BrokerBConfirmDeliveryDto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerBReadAccess(actor);
+
+    const plainCode = dto.code.trim();
+    if (!plainCode) {
+      throw new BadRequestException('Invalid or expired delivery code.');
+    }
+
+    let savedForHook!: Transaction;
+
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+
+      const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
+      const assignment = await assignRepo.findOne({
+        where: {
+          transactionId: row.id,
+          internalUserId: authUser.userId,
+          assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+          assignmentStatus: BrokerBAssignmentStatus.ACCEPTED,
+        },
+      });
+      if (!assignment) {
+        throw new NotFoundException('Transaction not found.');
+      }
+
+      assertTransactionAwaitingBrokerBDeliveryConfirmation(row);
+
+      const codeRepo = manager.getRepository(TransactionAuthCode);
+      const activeCode = await codeRepo.findOne({
+        where: {
+          transactionId: row.id,
+          brokerBAssignmentId: assignment.id,
+          invalidatedAt: IsNull(),
+          verifiedAt: IsNull(),
+        },
+        order: { issuedAt: 'DESC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!activeCode || activeCode.recipientId !== row.recipientId) {
+        throw new BadRequestException('Invalid or expired delivery code.');
+      }
+
+      if (activeCode.expiresAt.getTime() <= Date.now()) {
+        throw new BadRequestException('Invalid or expired delivery code.');
+      }
+
+      const match = await bcrypt.compare(plainCode, activeCode.codeHash);
+      if (!match) {
+        throw new BadRequestException('Invalid or expired delivery code.');
+      }
+
+      activeCode.verifiedAt = new Date();
+      await codeRepo.save(activeCode);
+
+      row.status = TransactionStatus.DELIVERED;
+      row.deliveryConfirmedAt = new Date();
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.BROKER_B_ACCEPTED,
+        toStatus: TransactionStatus.DELIVERED,
+        changedByUserId: authUser.userId,
+        changeReason: null,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory);
+    });
+
+    await this.workflowHooks.onBrokerBDeliveryConfirmed(savedForHook);
     return detail;
   }
 }
