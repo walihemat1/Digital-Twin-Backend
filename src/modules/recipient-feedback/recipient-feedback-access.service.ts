@@ -50,22 +50,14 @@ export class RecipientFeedbackAccessService {
   ) {}
 
   /**
-   * Validates a raw URL token and returns submission eligibility for the feedback form.
-   * Tokens are stored as HMAC-SHA256 fingerprints (opaque-token pepper).
+   * Resolves an active (non-expired, non-invalidated) feedback URL token to its transaction.
+   * Does not enforce transaction workflow status; callers apply delivery / submission rules.
    */
-  async getAccessByRawToken(
-    rawToken: string,
-  ): Promise<RecipientFeedbackAccessSuccess> {
-    const trimmed = typeof rawToken === 'string' ? rawToken.trim() : '';
-    if (!trimmed) {
-      throw new NotFoundException({
-        code: FeedbackAccessErrorCode.TOKEN_INVALID,
-        errorMessage: 'Invalid feedback link.',
-      });
-    }
-
+  async resolveActiveFeedbackToken(
+    trimmedRawToken: string,
+  ): Promise<{ transaction: Transaction; recipientId: string }> {
     const auth = this.config.getOrThrow<AuthConfigValues>('auth');
-    const tokenHash = hashOpaqueToken(trimmed, auth.opaqueTokenPepper);
+    const tokenHash = hashOpaqueToken(trimmedRawToken, auth.opaqueTokenPepper);
 
     const record = await this.accessTokens.findOne({
       where: { tokenHash },
@@ -95,6 +87,34 @@ export class RecipientFeedbackAccessService {
       });
     }
 
+    if (tx.recipientId !== record.recipientId) {
+      throw new NotFoundException({
+        code: FeedbackAccessErrorCode.TOKEN_INVALID,
+        errorMessage: 'Invalid feedback link.',
+      });
+    }
+
+    return { transaction: tx, recipientId: record.recipientId };
+  }
+
+  /**
+   * Validates a raw URL token and returns submission eligibility for the feedback form.
+   * Tokens are stored as HMAC-SHA256 fingerprints (opaque-token pepper).
+   */
+  async getAccessByRawToken(
+    rawToken: string,
+  ): Promise<RecipientFeedbackAccessSuccess> {
+    const trimmed = typeof rawToken === 'string' ? rawToken.trim() : '';
+    if (!trimmed) {
+      throw new NotFoundException({
+        code: FeedbackAccessErrorCode.TOKEN_INVALID,
+        errorMessage: 'Invalid feedback link.',
+      });
+    }
+
+    const { transaction: tx, recipientId } =
+      await this.resolveActiveFeedbackToken(trimmed);
+
     if (!FEEDBACK_ACCESS_TRANSACTION_STATUSES.has(tx.status)) {
       throw new ForbiddenException({
         code: FeedbackAccessErrorCode.TRANSACTION_NOT_ELIGIBLE,
@@ -103,19 +123,12 @@ export class RecipientFeedbackAccessService {
       });
     }
 
-    if (tx.recipientId !== record.recipientId) {
-      throw new NotFoundException({
-        code: FeedbackAccessErrorCode.TOKEN_INVALID,
-        errorMessage: 'Invalid feedback link.',
-      });
-    }
-
     const existing = await this.feedback.findOne({
       where: { transactionId: tx.id },
     });
 
     const recipient = await this.recipients.findOne({
-      where: { id: record.recipientId },
+      where: { id: recipientId },
     });
 
     return {
