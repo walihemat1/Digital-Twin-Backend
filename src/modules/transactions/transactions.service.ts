@@ -6,8 +6,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { AccountStatus } from '../../common/enums/account-status.enum';
+import { BrokerBAssignmentStatus } from '../../common/enums/broker-b-assignment-status.enum';
+import { BrokerBAssignmentType } from '../../common/enums/broker-b-assignment-type.enum';
 import { TransactionStatus } from '../../common/enums/transaction-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -17,9 +19,25 @@ import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
+import { TransactionBrokerBAssignment } from './entities/transaction-broker-b-assignment.entity';
 import { TransactionStatusHistory } from './entities/transaction-status-history.entity';
 import { Transaction } from './entities/transaction.entity';
 import { TransactionWorkflowHooks } from './transaction-workflow.hooks';
+
+/** Stages where an internal Broker B assignment is visible (TB-054 / US-BB-001). */
+const BROKER_B_VISIBLE_TRANSACTION_STATUSES: TransactionStatus[] = [
+  TransactionStatus.AWAITING_BROKER_B,
+  TransactionStatus.BROKER_B_ACCEPTED,
+  TransactionStatus.BROKER_B_DECLINED,
+  TransactionStatus.DELIVERED,
+  TransactionStatus.FEEDBACK_SUBMITTED,
+  TransactionStatus.COMPLETED,
+];
+
+const BROKER_B_OPEN_ASSIGNMENT_STATUSES: BrokerBAssignmentStatus[] = [
+  BrokerBAssignmentStatus.ASSIGNED,
+  BrokerBAssignmentStatus.ACCEPTED,
+];
 
 export type TransactionStatusHistoryView = {
   id: string;
@@ -61,6 +79,8 @@ export class TransactionsService {
     private readonly transactions: Repository<Transaction>,
     @InjectRepository(TransactionStatusHistory)
     private readonly statusHistory: Repository<TransactionStatusHistory>,
+    @InjectRepository(TransactionBrokerBAssignment)
+    private readonly brokerBAssignments: Repository<TransactionBrokerBAssignment>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly recipients: RecipientsRepository,
@@ -81,6 +101,16 @@ export class TransactionsService {
   private assertBrokerAReadAccess(actor: User): void {
     if (actor.role !== UserRole.BROKER_A) {
       throw new ForbiddenException('Only Broker A may view assigned transactions.');
+    }
+    if (actor.accountStatus !== AccountStatus.ACTIVE) {
+      throw new ForbiddenException('Account is not approved for this action.');
+    }
+  }
+
+  /** Internal Broker B read gate (permissions model §7.2). */
+  private assertBrokerBReadAccess(actor: User): void {
+    if (actor.role !== UserRole.BROKER_B) {
+      throw new ForbiddenException('Only Broker B may view assigned transactions.');
     }
     if (actor.accountStatus !== AccountStatus.ACTIVE) {
       throw new ForbiddenException('Account is not approved for this action.');
@@ -293,6 +323,80 @@ export class TransactionsService {
 
     const tx = await this.transactions.findOne({ where: { id } });
     if (!tx || tx.brokerAUserId !== authUser.userId) {
+      throw new NotFoundException('Transaction not found.');
+    }
+
+    const history = await this.statusHistory.find({
+      where: { transactionId: tx.id },
+      order: { createdAt: 'ASC' },
+    });
+
+    return this.toDetail(tx, history);
+  }
+
+  async listForBrokerB(
+    authUser: AuthenticatedUser,
+    options?: { offset?: number; limit?: number },
+  ): Promise<TransactionSummaryView[]> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerBReadAccess(actor);
+
+    const take = Math.min(Math.max(options?.limit ?? 20, 1), 50);
+    const skip = Math.max(options?.offset ?? 0, 0);
+
+    const rows = await this.transactions
+      .createQueryBuilder('tx')
+      .innerJoin(
+        TransactionBrokerBAssignment,
+        'bba',
+        'bba.transaction_id = tx.id AND bba.internal_user_id = :bbUserId AND bba.assignment_type = :bbAssignmentType',
+        {
+          bbUserId: authUser.userId,
+          bbAssignmentType: BrokerBAssignmentType.INTERNAL_USER,
+        },
+      )
+      .where('bba.assignment_status IN (:...bbAssignmentStatuses)', {
+        bbAssignmentStatuses: BROKER_B_OPEN_ASSIGNMENT_STATUSES,
+      })
+      .andWhere('tx.status IN (:...bbTxStatuses)', {
+        bbTxStatuses: BROKER_B_VISIBLE_TRANSACTION_STATUSES,
+      })
+      .orderBy('tx.submitted_at', 'DESC')
+      .skip(skip)
+      .take(take)
+      .getMany();
+
+    return rows.map((tx) => this.toSummary(tx));
+  }
+
+  async getDetailForBrokerB(
+    authUser: AuthenticatedUser,
+    id: string,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerBReadAccess(actor);
+
+    const tx = await this.transactions.findOne({ where: { id } });
+    if (!tx) {
+      throw new NotFoundException('Transaction not found.');
+    }
+
+    const assignment = await this.brokerBAssignments.findOne({
+      where: {
+        transactionId: id,
+        internalUserId: authUser.userId,
+        assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+        assignmentStatus: In(BROKER_B_OPEN_ASSIGNMENT_STATUSES),
+      },
+    });
+
+    if (!assignment || !BROKER_B_VISIBLE_TRANSACTION_STATUSES.includes(tx.status)) {
       throw new NotFoundException('Transaction not found.');
     }
 
