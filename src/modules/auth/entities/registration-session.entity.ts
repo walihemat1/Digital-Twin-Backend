@@ -31,27 +31,34 @@ export class RegistrationSession extends BaseEntity {
   recipientDetailsPayload!: Record<string, unknown> | null;
 
   @Column({
-    name: 'whatsapp_verification_status',
+    name: 'phone_verification_status',
     type: 'enum',
     enum: VerificationStatus,
     enumName: 'verification_status_enum',
     default: VerificationStatus.NOT_STARTED,
   })
-  whatsappVerificationStatus!: VerificationStatus;
+  phoneVerificationStatus!: VerificationStatus;
 
   @Column({
-    name: 'whatsapp_verification_sent_at',
+    name: 'phone_verification_sent_at',
     type: 'timestamptz',
     nullable: true,
   })
-  whatsappVerificationSentAt!: Date | null;
+  phoneVerificationSentAt!: Date | null;
 
   @Column({
-    name: 'whatsapp_verified_at',
+    name: 'phone_verified_at',
     type: 'timestamptz',
     nullable: true,
   })
-  whatsappVerifiedAt!: Date | null;
+  phoneVerifiedAt!: Date | null;
+
+  @Column({
+    name: 'phone_verification_resend_count',
+    type: 'int',
+    default: 0,
+  })
+  phoneVerificationResendCount!: number;
 
   @Column({
     name: 'email_verification_status',

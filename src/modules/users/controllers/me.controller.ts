@@ -60,9 +60,7 @@ export class MeController {
             city_town: profile.cityTown,
             zip_code: profile.zipCode,
             phone_number: profile.phoneNumber,
-            whatsapp_country_code: profile.whatsappCountryCode,
-            whatsapp_number: profile.whatsappNumber,
-            normalized_whatsapp_number: profile.normalizedWhatsappNumber,
+            registration_contact_phone: profile.contactPhoneE164,
             issuing_country: profile.issuingCountry,
             identification_number: profile.identificationNumber,
           }

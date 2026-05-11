@@ -6,7 +6,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import authConfig from '../../config/auth.config';
 import { UsersModule } from '../users/users.module';
 import { AuthSessionController } from './controllers/auth-session.controller';
-import { RegistrationVerificationController } from './controllers/registration-verification.controller';
 import { RegistrationController } from './controllers/registration.controller';
 import { MfaChallenge } from './entities/mfa-challenge.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
@@ -24,7 +23,7 @@ import { User } from '../users/entities/user.entity';
 import { UserProfile } from '../users/entities/user-profile.entity';
 import { RegistrationVerificationCode } from './entities/registration-verification-code.entity';
 import { RegistrationVerificationService } from './registration/registration-verification.service';
-import { TwilioWhatsappService } from './registration/twilio-whatsapp.service';
+import { TwilioVerifyService } from './registration/twilio-verify.service';
 
 @Module({
   imports: [
@@ -50,16 +49,12 @@ import { TwilioWhatsappService } from './registration/twilio-whatsapp.service';
       RefreshToken,
     ]),
   ],
-  controllers: [
-    RegistrationController,
-    RegistrationVerificationController,
-    AuthSessionController,
-  ],
+  controllers: [RegistrationController, AuthSessionController],
   providers: [
     JwtStrategy,
     RegistrationService,
     RegistrationVerificationService,
-    TwilioWhatsappService,
+    TwilioVerifyService,
     SendgridEmailService,
     AuthLoginService,
     MfaChallengeService,

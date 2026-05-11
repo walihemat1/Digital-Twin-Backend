@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsString,
@@ -5,9 +6,23 @@ import {
   MinLength,
   Matches,
   IsNotEmpty,
+  IsOptional,
 } from 'class-validator';
 
 export class RegistrationPersonalInfoStepDto {
+  @Transform(({ value }) => {
+    if (value == null) return undefined;
+    if (typeof value !== 'string') return value;
+    const t = value.trim();
+    return t.length === 0 ? undefined : t;
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255, {
+    message: 'Organization name must be at most 255 characters long.',
+  })
+  organizationName?: string;
+
   @IsString()
   @MinLength(1)
   @Matches(/\S/, {
@@ -31,19 +46,19 @@ export class RegistrationPersonalInfoStepDto {
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(12, { message: 'Password must be at least 12 characters long.' })
-  @MaxLength(128, {
-    message: 'Password must be less than 128 characters long.',
+  @MinLength(8, { message: 'Password must be at least 8 characters long.' })
+  @MaxLength(32, {
+    message: 'Password must be at most 32 characters long.',
   })
   password!: string;
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(12, {
-    message: 'Password confirmation must be at least 12 characters long.',
+  @MinLength(8, {
+    message: 'Password confirmation must be at least 8 characters long.',
   })
-  @MaxLength(128, {
-    message: 'Password confirmation must be less than 128 characters long.',
+  @MaxLength(32, {
+    message: 'Password confirmation must be at most 32 characters long.',
   })
   passwordConfirm!: string;
 }

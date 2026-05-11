@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Length,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -15,10 +16,23 @@ export class RegistrationLocationStepDto {
   @MaxLength(120)
   country!: string;
 
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @Length(2, 2)
+  countryCode!: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)
   stateProvince?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  stateProvinceCode?: string;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()

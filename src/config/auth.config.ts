@@ -42,7 +42,9 @@ const authConfig = registerAs('auth', () => ({
   emailFrom: process.env.EMAIL_FROM ?? '',
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+  /** Legacy SMS sender; unused by Twilio Verify registration flow. */
   twilioFromNumber: process.env.TWILIO_FROM_NUMBER ?? '',
+  twilioVerifyServiceSid: process.env.TWILIO_VERIFY_SERVICE_SID ?? '',
 }));
 
 export type AuthConfigValues = ReturnType<typeof authConfig>;

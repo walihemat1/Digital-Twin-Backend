@@ -101,6 +101,7 @@ export const envValidationSchema = Joi.object({
   TWILIO_ACCOUNT_SID: Joi.string().allow('').optional(),
   TWILIO_AUTH_TOKEN: Joi.string().allow('').optional(),
   TWILIO_FROM_NUMBER: Joi.string().allow('').optional(),
+  TWILIO_VERIFY_SERVICE_SID: Joi.string().allow('').optional(),
 
   /**
    * Pepper for deriving AES-256-GCM keys for `recipients.identification_number_encrypted`.

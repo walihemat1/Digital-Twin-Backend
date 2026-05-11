@@ -11,11 +11,11 @@ export class ResetPasswordDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsNotEmpty()
   @IsString()
-  @MinLength(12, {
-    message: 'New password must be at least 12 characters long.',
+  @MinLength(8, {
+    message: 'New password must be at least 8 characters long.',
   })
-  @MaxLength(128, {
-    message: 'New password must be less than 128 characters long.',
+  @MaxLength(32, {
+    message: 'New password must be at most 32 characters long.',
   })
   newPassword!: string;
 }

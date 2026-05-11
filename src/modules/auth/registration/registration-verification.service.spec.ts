@@ -1,6 +1,8 @@
-import { BadRequestException, GoneException, UnauthorizedException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
-import { NotificationChannel } from '../../../common/enums/notification-channel.enum';
+import {
+  BadRequestException,
+  GoneException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { RegistrationSession } from '../entities/registration-session.entity';
 import { RegistrationVerificationCode } from '../entities/registration-verification-code.entity';
@@ -11,11 +13,10 @@ describe('RegistrationVerificationService', () => {
     bcryptSaltRounds: 4,
     regVerificationCodeTtlSeconds: 300,
     regVerificationMaxAttempts: 2,
-    regVerificationMaxResends: 1,
+    regVerificationMaxResends: 3,
     regVerificationResendCooldownSeconds: 0,
   } as any;
 
-  let sentWhatsappCode = '';
   let sentEmailCode = '';
   let codes: RegistrationVerificationCode[] = [];
   const sessions = new Map<string, RegistrationSession>();
@@ -26,14 +27,15 @@ describe('RegistrationVerificationService', () => {
       selectedRole: null,
       currentStep: 'awaiting_contact',
       contactPayload: {
-        normalizedWhatsappNumber: '+1234567890',
+        phoneNumber: '+12345678901',
       },
       personalInfoPayload: { email: 'a@example.com', firstName: 'A' },
       locationPayload: null,
       recipientDetailsPayload: null,
-      whatsappVerificationStatus: VerificationStatus.NOT_STARTED,
-      whatsappVerificationSentAt: null,
-      whatsappVerifiedAt: null,
+      phoneVerificationStatus: VerificationStatus.NOT_STARTED,
+      phoneVerificationSentAt: null,
+      phoneVerifiedAt: null,
+      phoneVerificationResendCount: 0,
       emailVerificationStatus: VerificationStatus.NOT_STARTED,
       emailVerificationSentAt: null,
       emailVerifiedAt: null,
@@ -85,11 +87,11 @@ describe('RegistrationVerificationService', () => {
     }),
   };
 
-  const whatsapp = {
-    sendVerificationCode: jest.fn(async (_to: string, code: string) => {
-      sentWhatsappCode = code;
-    }),
+  const twilioVerify = {
+    sendSmsVerification: jest.fn(async () => {}),
+    checkVerification: jest.fn(async () => ({ status: 'approved' })),
   };
+
   const email = {
     sendLoginMfaCode: jest.fn(async (_to: string, _name: string, code: string) => {
       sentEmailCode = code;
@@ -100,14 +102,15 @@ describe('RegistrationVerificationService', () => {
 
   beforeEach(() => {
     codes = [];
-    sentWhatsappCode = '';
     sentEmailCode = '';
     sessions.clear();
+    twilioVerify.sendSmsVerification.mockClear();
+    twilioVerify.checkVerification.mockResolvedValue({ status: 'approved' });
     service = new RegistrationVerificationService(
       codesRepo as any,
       sessionsRepo as any,
       email as any,
-      whatsapp as any,
+      twilioVerify as any,
       authConfig,
     );
   });
@@ -118,46 +121,48 @@ describe('RegistrationVerificationService', () => {
     return s;
   }
 
-  it('sends and verifies WhatsApp code successfully', async () => {
+  it('sends phone verification via Twilio Verify and marks pending', async () => {
     const session = makeSession();
-    await service.sendWhatsappCode(session);
-    expect(sentWhatsappCode).toHaveLength(6);
-    expect(session.whatsappVerificationStatus).toBe(VerificationStatus.PENDING);
-
-    const verified = await service.verifyWhatsappCode(session, sentWhatsappCode);
-    expect(verified.verifiedAt).toBeDefined();
-    expect(session.whatsappVerificationStatus).toBe(VerificationStatus.VERIFIED);
+    const out = await service.sendPhoneVerificationCode(session, '+12345678901');
+    expect(twilioVerify.sendSmsVerification).toHaveBeenCalledWith('+12345678901');
+    expect(session.phoneVerificationStatus).toBe(VerificationStatus.PENDING);
+    expect(session.phoneVerificationResendCount).toBe(1);
+    expect(out.sent).toBe(true);
+    expect(out.codeExpiresAt).toBeTruthy();
+    expect(out.resendCooldownSeconds).toBe(authConfig.regVerificationResendCooldownSeconds);
   });
 
-  it('fails WhatsApp verification on wrong code and increments attempts', async () => {
+  it('verifies phone when Twilio returns approved', async () => {
+    const session = makeSession({
+      phoneVerificationStatus: VerificationStatus.PENDING,
+      phoneVerificationResendCount: 1,
+    });
+    const out = await service.verifyPhoneCode(session, '+12345678901', '123456');
+    expect(out.verified).toBe(true);
+    expect(session.phoneVerificationStatus).toBe(VerificationStatus.VERIFIED);
+    expect(twilioVerify.checkVerification).toHaveBeenCalledWith(
+      '+12345678901',
+      '123456',
+    );
+  });
+
+  it('returns verified false when Twilio status is not approved', async () => {
+    twilioVerify.checkVerification.mockResolvedValueOnce({ status: 'pending' });
+    const session = makeSession({
+      phoneVerificationStatus: VerificationStatus.PENDING,
+      phoneVerificationResendCount: 1,
+    });
+    const out = await service.verifyPhoneCode(session, '+12345678901', '000000');
+    expect(out.verified).toBe(false);
+    expect(out.message).toBeDefined();
+    expect(session.phoneVerificationStatus).toBe(VerificationStatus.PENDING);
+  });
+
+  it('rejects mismatched phone numbers on send', async () => {
     const session = makeSession();
-    await service.sendWhatsappCode(session);
     await expect(
-      service.verifyWhatsappCode(session, '000000'),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    const latest = codes[codes.length - 1];
-    expect(latest.attemptCount).toBe(1);
-  });
-
-  it('marks WhatsApp verification expired when code is stale', async () => {
-    const session = makeSession();
-    await service.sendWhatsappCode(session);
-    codes[codes.length - 1].expiresAt = new Date(Date.now() - 1000);
-    await expect(
-      service.verifyWhatsappCode(session, sentWhatsappCode),
-    ).rejects.toBeInstanceOf(GoneException);
-    expect(session.whatsappVerificationStatus).toBe(VerificationStatus.EXPIRED);
-  });
-
-  it('resends WhatsApp code and invalidates previous', async () => {
-    const session = makeSession();
-    await service.sendWhatsappCode(session);
-    const firstId = codes[codes.length - 1].id;
-    await service.resendWhatsappCode(session);
-    expect(codes.length).toBe(2);
-    const first = codes.find((c) => c.id === firstId)!;
-    expect(first.invalidatedAt).not.toBeNull();
-    expect(codes[codes.length - 1].resendCount).toBe(1);
+      service.sendPhoneVerificationCode(session, '+19998887777'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('sends and verifies email code successfully', async () => {
@@ -170,15 +175,41 @@ describe('RegistrationVerificationService', () => {
     expect(session.emailVerificationStatus).toBe(VerificationStatus.VERIFIED);
   });
 
-  it('blocks verification after attempts exceeded', async () => {
-    const session = makeSession();
-    await service.sendWhatsappCode(session);
+  it('fails email verification on wrong code and increments attempts', async () => {
+    const session = makeSession({
+      personalInfoPayload: { email: 'a@example.com', firstName: 'A' },
+    });
+    await service.sendEmailCode(session);
     await expect(
-      service.verifyWhatsappCode(session, '111111'),
+      service.verifyEmailCode(session, '000000'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    const latest = codes[codes.length - 1];
+    expect(latest.attemptCount).toBe(1);
+  });
+
+  it('marks email verification expired when code is stale', async () => {
+    const session = makeSession({
+      personalInfoPayload: { email: 'a@example.com', firstName: 'A' },
+    });
+    await service.sendEmailCode(session);
+    codes[codes.length - 1].expiresAt = new Date(Date.now() - 1000);
+    await expect(
+      service.verifyEmailCode(session, sentEmailCode),
+    ).rejects.toBeInstanceOf(GoneException);
+    expect(session.emailVerificationStatus).toBe(VerificationStatus.EXPIRED);
+  });
+
+  it('blocks email verification after attempts exceeded', async () => {
+    const session = makeSession({
+      personalInfoPayload: { email: 'a@example.com', firstName: 'A' },
+    });
+    await service.sendEmailCode(session);
+    await expect(
+      service.verifyEmailCode(session, '111111'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(
-      service.verifyWhatsappCode(session, '222222'),
+      service.verifyEmailCode(session, '222222'),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(session.whatsappVerificationStatus).toBe(VerificationStatus.FAILED);
+    expect(session.emailVerificationStatus).toBe(VerificationStatus.FAILED);
   });
 });

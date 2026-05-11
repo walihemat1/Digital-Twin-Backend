@@ -32,19 +32,24 @@ describe('RegistrationService registration gating', () => {
   const approvalsRepo = { create: jest.fn(), save: jest.fn() };
 
   const verificationService = {
-    sendWhatsappCode: jest.fn(async (s: RegistrationSession) => {
-      s.whatsappVerificationStatus = VerificationStatus.PENDING;
-      s.whatsappVerificationSentAt = new Date();
+    sendPhoneVerificationCode: jest.fn(async (s: RegistrationSession) => {
+      s.phoneVerificationStatus = VerificationStatus.PENDING;
+      s.phoneVerificationSentAt = new Date();
+      s.phoneVerificationResendCount += 1;
+      const now = new Date();
+      return {
+        sent: true,
+        codeExpiresAt: new Date(
+          now.getTime() + 600_000,
+        ).toISOString(),
+        resendCooldownSeconds: 60,
+      };
     }),
     sendEmailCode: jest.fn(async (s: RegistrationSession) => {
       s.emailVerificationStatus = VerificationStatus.PENDING;
       s.emailVerificationSentAt = new Date();
     }),
-    verifyWhatsappCode: jest.fn(async (s: RegistrationSession) => {
-      s.whatsappVerificationStatus = VerificationStatus.VERIFIED;
-      s.whatsappVerifiedAt = new Date();
-      return { verifiedAt: new Date().toISOString() };
-    }),
+    verifyPhoneCode: jest.fn(async () => ({ verified: true })),
     verifyEmailCode: jest.fn(async (s: RegistrationSession) => {
       s.emailVerificationStatus = VerificationStatus.VERIFIED;
       s.emailVerifiedAt = new Date();
@@ -91,10 +96,11 @@ describe('RegistrationService registration gating', () => {
       personalInfoPayload: over.personalInfoPayload ?? null,
       locationPayload: over.locationPayload ?? null,
       recipientDetailsPayload: over.recipientDetailsPayload ?? null,
-      whatsappVerificationStatus:
-        over.whatsappVerificationStatus ?? VerificationStatus.NOT_STARTED,
-      whatsappVerificationSentAt: over.whatsappVerificationSentAt ?? null,
-      whatsappVerifiedAt: over.whatsappVerifiedAt ?? null,
+      phoneVerificationStatus:
+        over.phoneVerificationStatus ?? VerificationStatus.NOT_STARTED,
+      phoneVerificationSentAt: over.phoneVerificationSentAt ?? null,
+      phoneVerifiedAt: over.phoneVerifiedAt ?? null,
+      phoneVerificationResendCount: over.phoneVerificationResendCount ?? 0,
       emailVerificationStatus:
         over.emailVerificationStatus ?? VerificationStatus.NOT_STARTED,
       emailVerificationSentAt: over.emailVerificationSentAt ?? null,
@@ -108,10 +114,10 @@ describe('RegistrationService registration gating', () => {
     return session;
   }
 
-  it('blocks personal info when WhatsApp not verified', async () => {
+  it('blocks personal info when phone not verified', async () => {
     const session = makeSession({
       currentStep: 'awaiting_personal_info',
-      whatsappVerificationStatus: VerificationStatus.PENDING,
+      phoneVerificationStatus: VerificationStatus.PENDING,
     });
     await expect(
       service.savePersonalInfoStep(session.id, {
@@ -127,8 +133,9 @@ describe('RegistrationService registration gating', () => {
   it('blocks location when email not verified', async () => {
     const session = makeSession({
       currentStep: 'awaiting_location',
-      whatsappVerificationStatus: VerificationStatus.VERIFIED,
+      phoneVerificationStatus: VerificationStatus.VERIFIED,
       emailVerificationStatus: VerificationStatus.PENDING,
+      contactPayload: { phoneNumber: '+12025559876' } as any,
       personalInfoPayload: {
         firstName: 'A',
         lastName: 'B',
@@ -139,10 +146,42 @@ describe('RegistrationService registration gating', () => {
     });
     await expect(
       service.saveLocationStep(session.id, {
-        country: 'US',
-        addressLine1: '123',
-        cityTown: 'City',
-        phoneNumber: '12345',
+        country: 'United States',
+        countryCode: 'US',
+        stateProvince: 'California',
+        stateProvinceCode: 'CA',
+        addressLine1: '123 Main Street',
+        cityTown: 'Acalanes Ridge',
+        zipCode: '90001',
+        phoneNumber: '+12025559876',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects location when phone number does not match verified contact', async () => {
+    const session = makeSession({
+      currentStep: 'awaiting_location',
+      phoneVerificationStatus: VerificationStatus.VERIFIED,
+      emailVerificationStatus: VerificationStatus.VERIFIED,
+      contactPayload: { phoneNumber: '+12025559876' } as any,
+      personalInfoPayload: {
+        firstName: 'A',
+        lastName: 'B',
+        email: 'a@example.com',
+        passwordHash: 'h',
+        passwordPolicyVersion: 'v1',
+      } as any,
+    });
+    await expect(
+      service.saveLocationStep(session.id, {
+        country: 'United States',
+        countryCode: 'US',
+        stateProvince: 'California',
+        stateProvinceCode: 'CA',
+        addressLine1: '123 Main Street',
+        cityTown: 'Acalanes Ridge',
+        zipCode: '90001',
+        phoneNumber: '+12025559999',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -150,7 +189,7 @@ describe('RegistrationService registration gating', () => {
   it('blocks completion when verifications are incomplete', async () => {
     const session = makeSession({
       currentStep: 'ready_to_complete',
-      contactPayload: { normalizedWhatsappNumber: '+123' } as any,
+      contactPayload: { phoneNumber: '+12025559876' } as any,
       personalInfoPayload: {
         firstName: 'A',
         lastName: 'B',
@@ -159,12 +198,13 @@ describe('RegistrationService registration gating', () => {
         passwordPolicyVersion: 'v1',
       } as any,
       locationPayload: {
-        country: 'US',
+        country: 'United States',
+        countryCode: 'US',
         addressLine1: '123',
         cityTown: 'City',
         phoneNumber: '12345',
       } as any,
-      whatsappVerificationStatus: VerificationStatus.PENDING,
+      phoneVerificationStatus: VerificationStatus.PENDING,
       emailVerificationStatus: VerificationStatus.PENDING,
     });
     await expect(
@@ -172,25 +212,24 @@ describe('RegistrationService registration gating', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('resets WhatsApp verification when number changes', async () => {
+  it('resets phone verification when number changes', async () => {
     const session = makeSession({
       currentStep: 'awaiting_personal_info',
       contactPayload: {
-        whatsappCountryCode: '+1',
-        whatsappNumber: '9999999',
-        normalizedWhatsappNumber: '+19999999',
+        phoneNumber: '+12025559876',
       } as any,
-      whatsappVerificationStatus: VerificationStatus.VERIFIED,
-      whatsappVerifiedAt: new Date(),
+      phoneVerificationStatus: VerificationStatus.VERIFIED,
+      phoneVerifiedAt: new Date(),
+      phoneVerificationResendCount: 0,
     });
 
     await service.saveContactStep(session.id, {
-      whatsappCountryCode: '+1',
-      whatsappNumber: '8888888',
+      phoneNumber: '+12025559877',
     });
 
     const updated = sessions.get(session.id)!;
-    expect(updated.whatsappVerificationStatus).toBe(VerificationStatus.PENDING);
-    expect(updated.currentStep).toBe('awaiting_whatsapp_verification');
+    expect(updated.phoneVerificationStatus).toBe(VerificationStatus.NOT_STARTED);
+    expect(updated.currentStep).toBe('awaiting_phone_verification');
+    expect(verificationService.sendPhoneVerificationCode).not.toHaveBeenCalled();
   });
 });
