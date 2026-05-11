@@ -4,6 +4,7 @@ import { AuditModule } from '../audit/audit.module';
 import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
 import { RecipientsModule } from '../recipients/recipients.module';
 import { User } from '../users/entities/user.entity';
+import { UserProfile } from '../users/entities/user-profile.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
 import { CoordinatorAffirmation } from './entities/coordinator-affirmation.entity';
 import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
@@ -26,6 +27,7 @@ import { TransactionsService } from './transactions.service';
       CoordinatorAffirmation,
       RecipientFeedback,
       User,
+      UserProfile,
     ]),
     RecipientsModule,
     AuditModule,

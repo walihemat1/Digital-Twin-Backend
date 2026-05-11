@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { TransactionStatus } from '../../../common/enums/transaction-status.enum';
 
 export class ListTransactionsQueryDto {
   @IsOptional()
@@ -14,4 +15,8 @@ export class ListTransactionsQueryDto {
   @Min(1)
   @Max(50)
   limit?: number;
+
+  @IsOptional()
+  @IsEnum(TransactionStatus)
+  status?: TransactionStatus;
 }
