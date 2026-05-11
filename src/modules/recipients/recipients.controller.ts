@@ -15,8 +15,10 @@ export class RecipientsController {
 
   @Get('search')
   search(@Query() query: SearchRecipientsQueryDto) {
-    const limit = query.limit ?? 20;
-    return this.recipients.search(query.q, limit);
+    const limit = query.limit ?? 10;
+    const page = query.page ?? 1;
+    const q = typeof query.q === 'string' ? query.q.trim() : '';
+    return this.recipients.searchPaged(q, { limit, page });
   }
 
   @Post()

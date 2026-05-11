@@ -39,4 +39,31 @@ export class Recipient extends BaseEntity {
 
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
+
+  @Column({ name: 'organization_name', type: 'varchar', length: 255, nullable: true })
+  organizationName!: string | null;
+
+  @Column({ name: 'email', type: 'varchar', length: 320, nullable: true })
+  email!: string | null;
+
+  @Column({ name: 'whatsapp_number', type: 'varchar', length: 32, nullable: true })
+  whatsappNumber!: string | null;
+
+  @Column({ name: 'country_code', type: 'varchar', length: 2, nullable: true })
+  countryCode!: string | null;
+
+  @Column({ name: 'state_province_code', type: 'varchar', length: 32, nullable: true })
+  stateProvinceCode!: string | null;
+
+  @Column({ name: 'address_line_1', type: 'varchar', length: 500, nullable: true })
+  addressLine1!: string | null;
+
+  @Column({ name: 'address_line_2', type: 'varchar', length: 500, nullable: true })
+  addressLine2!: string | null;
+
+  @Column({ name: 'city_town', type: 'varchar', length: 255, nullable: true })
+  cityTown!: string | null;
+
+  @Column({ name: 'zip_code', type: 'varchar', length: 32, nullable: true })
+  zipCode!: string | null;
 }

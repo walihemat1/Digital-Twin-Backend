@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  IsEmail,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -51,4 +52,74 @@ export class CreateRecipientDto {
   @MinLength(1)
   @MaxLength(256)
   identificationNumber?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(255)
+  organizationName?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsEmail({}, { message: 'Enter a valid email address.' })
+  @MaxLength(320)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(8)
+  @Matches(/^\+\d{1,4}$/, {
+    message: 'whatsappCountryCode must be in E.164 prefix form like +1',
+  })
+  whatsappCountryCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(32)
+  whatsappNumber?: string;
+
+  @IsNotEmpty({ message: 'Country/Region is required' })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @Matches(/^[A-Z]{2}$/, {
+    message: 'countryCode must be a valid ISO 3166-1 alpha-2 code',
+  })
+  countryCode!: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(32)
+  stateProvinceCode?: string;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: 'Address line 1 is required' })
+  @MinLength(1)
+  @MaxLength(500)
+  addressLine1!: string;
+
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  addressLine2?: string;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: 'City/Town is required' })
+  @MinLength(1)
+  @MaxLength(255)
+  cityTown!: string;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: 'Zip code is required' })
+  @MinLength(1)
+  @MaxLength(32)
+  zipCode!: string;
 }

@@ -2,15 +2,18 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
+import authConfig from '../../../config/auth.config';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { User } from '../../users/entities/user.entity';
 import { AuthLoginService } from './auth-login.service';
+import { AuthTokensService } from './auth-tokens.service';
 import { MfaChallengeService } from './mfa-challenge.service';
 
 describe('AuthLoginService', () => {
   let service: AuthLoginService;
   const mfa = { startLoginMfa: jest.fn() };
+  const authTokens = { buildTokenPair: jest.fn() };
   const save = jest.fn();
   const findOne = jest.fn();
 
@@ -18,6 +21,7 @@ describe('AuthLoginService', () => {
     save.mockReset();
     findOne.mockReset();
     mfa.startLoginMfa.mockReset();
+    authTokens.buildTokenPair.mockReset();
     mfa.startLoginMfa.mockResolvedValue({
       mfaChallengeId: 'mfa-id',
       expiresAt: '2099-01-01T00:00:00.000Z',
@@ -27,6 +31,11 @@ describe('AuthLoginService', () => {
       providers: [
         AuthLoginService,
         { provide: MfaChallengeService, useValue: mfa },
+        { provide: AuthTokensService, useValue: authTokens },
+        {
+          provide: authConfig.KEY,
+          useValue: { loginSkipEmailMfa: false },
+        },
         {
           provide: getRepositoryToken(User),
           useValue: { findOne, save },
@@ -97,5 +106,51 @@ describe('AuthLoginService', () => {
       service.login({ email: 'a@b.com', password: 'p' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(mfa.startLoginMfa).not.toHaveBeenCalled();
+  });
+
+  describe('when loginSkipEmailMfa is enabled', () => {
+    beforeEach(async () => {
+      authTokens.buildTokenPair.mockResolvedValue({
+        accessToken: 'at',
+        refreshToken: 'rt',
+      });
+      const mod: TestingModule = await Test.createTestingModule({
+        providers: [
+          AuthLoginService,
+          { provide: MfaChallengeService, useValue: mfa },
+          { provide: AuthTokensService, useValue: authTokens },
+          {
+            provide: authConfig.KEY,
+            useValue: { loginSkipEmailMfa: true },
+          },
+          {
+            provide: getRepositoryToken(User),
+            useValue: { findOne, save },
+          },
+        ],
+      }).compile();
+      service = mod.get(AuthLoginService);
+    });
+
+    it('returns token pair and skips MFA', async () => {
+      const hash = await bcrypt.hash('right-pass', 4);
+      const user = makeUser({ passwordHash: hash });
+      findOne.mockResolvedValue(user);
+      const r = await service.login({
+        email: 'A@B.COM',
+        password: 'right-pass',
+      });
+      expect(r).toEqual(
+        expect.objectContaining({ accessToken: 'at', refreshToken: 'rt' }),
+      );
+      expect(mfa.startLoginMfa).not.toHaveBeenCalled();
+      expect(authTokens.buildTokenPair).toHaveBeenCalledWith(user);
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failedAttemptCount: 0,
+          lastLoginAt: expect.any(Date),
+        }),
+      );
+    });
   });
 });
