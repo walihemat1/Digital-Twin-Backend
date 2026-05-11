@@ -3,7 +3,6 @@ import {
   GoneException,
   Inject,
   Injectable,
-  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -18,21 +17,20 @@ import { SendgridEmailService } from '../email/sendgrid-email.service';
 import { RegistrationSession } from '../entities/registration-session.entity';
 import { RegistrationVerificationCode } from '../entities/registration-verification-code.entity';
 import { generateSixDigitMfaCode } from '../crypto/opaque-token.util';
-import { TwilioWhatsappService } from './twilio-whatsapp.service';
+import { normalizePhoneToE164 } from './phone-number.util';
+import { TwilioVerifyService } from './twilio-verify.service';
 
-type Channel = NotificationChannel.EMAIL | NotificationChannel.WHATSAPP;
+type EmailChannel = NotificationChannel.EMAIL;
 
 @Injectable()
 export class RegistrationVerificationService {
-  private readonly log = new Logger(RegistrationVerificationService.name);
-
   constructor(
     @InjectRepository(RegistrationVerificationCode)
     private readonly codes: Repository<RegistrationVerificationCode>,
     @InjectRepository(RegistrationSession)
     private readonly sessions: Repository<RegistrationSession>,
     private readonly email: SendgridEmailService,
-    private readonly whatsapp: TwilioWhatsappService,
+    private readonly twilioVerify: TwilioVerifyService,
     @Inject(authConfig.KEY)
     private readonly auth: ConfigType<typeof authConfig>,
   ) {}
@@ -50,48 +48,154 @@ export class RegistrationVerificationService {
     return session;
   }
 
-  async sendWhatsappCode(sessionOrId: RegistrationSession | string): Promise<{
-    expiresAt: string;
-    resendCount: number;
+  private getContactPhoneE164(session: RegistrationSession): string | null {
+    const payload = session.contactPayload as { phoneNumber?: string } | null;
+    const raw =
+      (typeof payload?.phoneNumber === 'string' && payload.phoneNumber) || null;
+    if (!raw) {
+      return null;
+    }
+    try {
+      return normalizePhoneToE164(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Sends an SMS OTP via Twilio Verify (no local OTP storage).
+   */
+  async sendPhoneVerificationCode(
+    sessionOrId: RegistrationSession | string,
+    phoneNumberFromClient?: string,
+  ): Promise<{
+    sent: boolean;
+    codeExpiresAt: string;
+    resendCooldownSeconds: number;
   }> {
     const session = await this.resolveSession(sessionOrId);
-    const number =
-      (session.contactPayload as { normalizedWhatsappNumber?: string } | null)
-        ?.normalizedWhatsappNumber;
-    if (!number) {
+    await this.ensureSessionActive(session);
+
+    const stored = this.getContactPhoneE164(session);
+    if (!stored) {
       throw new BadRequestException(
-        'WhatsApp number is missing from the registration contact step.',
+        'Phone number is missing from the registration contact step.',
       );
     }
-    return this.issueCode(session, NotificationChannel.WHATSAPP, (code) =>
-      this.whatsapp.sendVerificationCode(number, code),
+
+    const target = phoneNumberFromClient
+      ? normalizePhoneToE164(phoneNumberFromClient)
+      : stored;
+
+    if (target !== stored) {
+      throw new BadRequestException(
+        'Phone number does not match the saved contact number.',
+      );
+    }
+
+    if (session.phoneVerificationStatus === VerificationStatus.VERIFIED) {
+      const verifiedNow = new Date();
+      const codeExpiresAt = new Date(
+        verifiedNow.getTime() +
+          this.auth.regVerificationCodeTtlSeconds * 1000,
+      );
+      return {
+        sent: true,
+        codeExpiresAt: codeExpiresAt.toISOString(),
+        resendCooldownSeconds: this.auth.regVerificationResendCooldownSeconds,
+      };
+    }
+
+    const now = new Date();
+    if (session.phoneVerificationSentAt) {
+      const elapsed =
+        now.getTime() - session.phoneVerificationSentAt.getTime();
+      const cooldownMs = this.auth.regVerificationResendCooldownSeconds * 1000;
+      if (elapsed < cooldownMs) {
+        throw new BadRequestException(
+          'Please wait before requesting another verification code.',
+        );
+      }
+    }
+
+    if (
+      session.phoneVerificationResendCount >=
+      this.auth.regVerificationMaxResends
+    ) {
+      throw new BadRequestException(
+        'Resend limit reached for this verification.',
+      );
+    }
+
+    await this.twilioVerify.sendSmsVerification(target);
+
+    session.phoneVerificationStatus = VerificationStatus.PENDING;
+    session.phoneVerificationSentAt = now;
+    session.phoneVerifiedAt = null;
+    session.phoneVerificationResendCount += 1;
+    await this.sessions.save(session);
+
+    const codeExpiresAt = new Date(
+      now.getTime() + this.auth.regVerificationCodeTtlSeconds * 1000,
     );
+    return {
+      sent: true,
+      codeExpiresAt: codeExpiresAt.toISOString(),
+      resendCooldownSeconds: this.auth.regVerificationResendCooldownSeconds,
+    };
   }
 
-  async resendWhatsappCode(sessionOrId: RegistrationSession | string) {
-    return this.sendWhatsappCode(sessionOrId);
-  }
-
-  async verifyWhatsappCode(
+  async resendPhoneVerificationCode(
     sessionOrId: RegistrationSession | string,
+    phoneNumberFromClient?: string,
+  ): Promise<{
+    sent: boolean;
+    codeExpiresAt: string;
+    resendCooldownSeconds: number;
+  }> {
+    return this.sendPhoneVerificationCode(sessionOrId, phoneNumberFromClient);
+  }
+
+  async verifyPhoneCode(
+    sessionOrId: RegistrationSession | string,
+    phoneNumberFromClient: string,
     code: string,
-  ): Promise<{ verifiedAt: string }> {
+  ): Promise<{ verified: boolean; message?: string }> {
     const session = await this.resolveSession(sessionOrId);
-    return this.verifyCode(
-      session,
-      NotificationChannel.WHATSAPP,
-      code,
-      (s, now) => {
-        s.whatsappVerificationStatus = VerificationStatus.VERIFIED;
-        s.whatsappVerifiedAt = now;
-      },
-      (s) => {
-        s.whatsappVerificationStatus = VerificationStatus.EXPIRED;
-      },
-      (s) => {
-        s.whatsappVerificationStatus = VerificationStatus.FAILED;
-      },
+    await this.ensureSessionActive(session);
+
+    const stored = this.getContactPhoneE164(session);
+    if (!stored) {
+      throw new BadRequestException(
+        'Phone number is missing from the registration contact step.',
+      );
+    }
+
+    const target = normalizePhoneToE164(phoneNumberFromClient);
+    if (target !== stored) {
+      throw new BadRequestException(
+        'Phone number does not match the saved contact number.',
+      );
+    }
+
+    const { status } = await this.twilioVerify.checkVerification(
+      target,
+      code.trim(),
     );
+
+    if (status === 'approved') {
+      const now = new Date();
+      session.phoneVerificationStatus = VerificationStatus.VERIFIED;
+      session.phoneVerifiedAt = now;
+      await this.sessions.save(session);
+      return { verified: true };
+    }
+
+    const message =
+      status === 'failed'
+        ? 'Unable to verify the code right now. Try again shortly.'
+        : 'Invalid or expired verification code.';
+    return { verified: false, message };
   }
 
   async sendEmailCode(sessionOrId: RegistrationSession | string): Promise<{
@@ -139,7 +243,7 @@ export class RegistrationVerificationService {
 
   private async issueCode(
     session: RegistrationSession,
-    channel: Channel,
+    channel: EmailChannel,
     send: (code: string) => Promise<void>,
   ): Promise<{ expiresAt: string; resendCount: number }> {
     await this.ensureSessionActive(session);
@@ -191,15 +295,9 @@ export class RegistrationVerificationService {
 
     await send(plain);
 
-    if (channel === NotificationChannel.WHATSAPP) {
-      session.whatsappVerificationStatus = VerificationStatus.PENDING;
-      session.whatsappVerificationSentAt = now;
-      session.whatsappVerifiedAt = null;
-    } else {
-      session.emailVerificationStatus = VerificationStatus.PENDING;
-      session.emailVerificationSentAt = now;
-      session.emailVerifiedAt = null;
-    }
+    session.emailVerificationStatus = VerificationStatus.PENDING;
+    session.emailVerificationSentAt = now;
+    session.emailVerifiedAt = null;
     await this.sessions.save(session);
 
     return {
@@ -210,7 +308,7 @@ export class RegistrationVerificationService {
 
   private async verifyCode(
     session: RegistrationSession,
-    channel: Channel,
+    channel: EmailChannel,
     code: string,
     onSuccess: (session: RegistrationSession, now: Date) => void,
     onExpired: (session: RegistrationSession) => void,

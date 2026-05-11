@@ -24,6 +24,8 @@ import { RegistrationLocationStepDto } from '../dto/registration-location-step.d
 import { RegistrationPersonalInfoStepDto } from '../dto/registration-personal-info-step.dto';
 import { RegistrationVerifyCodeDto } from '../dto/registration-verify-code.dto';
 import { RegistrationRecipientDetailsStepDto } from '../dto/registration-recipient-details-step.dto';
+import { RegistrationSendPhoneVerificationDto } from '../dto/registration-send-phone-verification.dto';
+import { RegistrationVerifyPhoneDto } from '../dto/registration-verify-phone.dto';
 import { SelectRoleDto } from '../dto/select-role.dto';
 import { RegistrationSession } from '../entities/registration-session.entity';
 import {
@@ -38,12 +40,11 @@ import {
   isPasswordPolicyCompliant,
   passwordPolicyFailureMessage,
 } from './password-policy';
-import { buildNormalizedWhatsappNumber } from './whatsapp.util';
+import { validateRegistrationLocationGeography } from './registration-location-geo.util';
+import { normalizePhoneToE164 } from './phone-number.util';
 
 type ContactPayloadV1 = {
-  whatsappCountryCode: string;
-  whatsappNumber: string;
-  normalizedWhatsappNumber: string;
+  phoneNumber: string;
 };
 
 type PersonalInfoPayloadV1 = {
@@ -52,11 +53,15 @@ type PersonalInfoPayloadV1 = {
   email: string;
   passwordHash: string;
   passwordPolicyVersion: string;
+  /** Present for Coordinator/Sender when provided; otherwise omitted or null. */
+  organizationName?: string | null;
 };
 
 type LocationPayloadV1 = {
   country: string;
+  countryCode: string;
   stateProvince?: string;
+  stateProvinceCode?: string;
   addressLine1: string;
   addressLine2?: string;
   cityTown: string;
@@ -94,9 +99,10 @@ export class RegistrationService {
       personalInfoPayload: null,
       locationPayload: null,
       recipientDetailsPayload: null,
-      whatsappVerificationStatus: VerificationStatus.NOT_STARTED,
-      whatsappVerificationSentAt: null,
-      whatsappVerifiedAt: null,
+      phoneVerificationStatus: VerificationStatus.NOT_STARTED,
+      phoneVerificationSentAt: null,
+      phoneVerifiedAt: null,
+      phoneVerificationResendCount: 0,
       emailVerificationStatus: VerificationStatus.NOT_STARTED,
       emailVerificationSentAt: null,
       emailVerifiedAt: null,
@@ -126,7 +132,7 @@ export class RegistrationService {
     session.selectedRole = dto.role;
     session.currentStep = RegistrationStep.AWAITING_CONTACT;
     session.verificationStatus = VerificationStatus.UNVERIFIED;
-    session.whatsappVerificationStatus = VerificationStatus.UNVERIFIED;
+    session.phoneVerificationStatus = VerificationStatus.UNVERIFIED;
     session.emailVerificationStatus = VerificationStatus.UNVERIFIED;
 
     if (roleChanged) {
@@ -134,9 +140,10 @@ export class RegistrationService {
       session.personalInfoPayload = null;
       session.locationPayload = null;
       session.recipientDetailsPayload = null;
-      session.whatsappVerificationStatus = VerificationStatus.NOT_STARTED;
-      session.whatsappVerificationSentAt = null;
-      session.whatsappVerifiedAt = null;
+      session.phoneVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.phoneVerificationSentAt = null;
+      session.phoneVerifiedAt = null;
+      session.phoneVerificationResendCount = 0;
       session.emailVerificationStatus = VerificationStatus.NOT_STARTED;
       session.emailVerificationSentAt = null;
       session.emailVerifiedAt = null;
@@ -162,41 +169,36 @@ export class RegistrationService {
       throw new BadRequestException('Role must be selected first.');
     }
 
-    const normalized = buildNormalizedWhatsappNumber(
-      dto.whatsappCountryCode,
-      dto.whatsappNumber,
-    );
+    const normalized = normalizePhoneToE164(dto.phoneNumber);
 
     const payload: ContactPayloadV1 = {
-      whatsappCountryCode: dto.whatsappCountryCode.trim(),
-      whatsappNumber: normalized,
-      normalizedWhatsappNumber: normalized,
+      phoneNumber: normalized,
     };
 
     const existing =
       session.contactPayload as ContactPayloadV1 | Record<string, unknown> | null;
     const numberChanged =
       !existing ||
-      (existing as ContactPayloadV1).normalizedWhatsappNumber !== normalized;
+      (existing as ContactPayloadV1).phoneNumber !== normalized;
 
     session.contactPayload = payload as unknown as Record<string, unknown>;
     const needsVerification =
       numberChanged ||
-      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED;
+      session.phoneVerificationStatus !== VerificationStatus.VERIFIED;
 
     if (needsVerification) {
-      session.whatsappVerifiedAt = null;
-      session.whatsappVerificationSentAt = null;
-      session.whatsappVerificationStatus = VerificationStatus.NOT_STARTED;
-      session.currentStep = RegistrationStep.AWAITING_WHATSAPP_VERIFICATION;
-      await this.verification.sendWhatsappCode(session);
-      return this.sessions.findOneOrFail({ where: { id: session.id } });
+      session.phoneVerifiedAt = null;
+      session.phoneVerificationSentAt = null;
+      session.phoneVerificationResendCount = 0;
+      session.phoneVerificationStatus = VerificationStatus.NOT_STARTED;
+      session.currentStep = RegistrationStep.AWAITING_PHONE_VERIFICATION;
+      return this.sessions.save(session);
     }
 
     // Already verified and number unchanged; keep progressing if still early in the flow
     if (
       session.currentStep === RegistrationStep.AWAITING_CONTACT ||
-      session.currentStep === RegistrationStep.AWAITING_WHATSAPP_VERIFICATION
+      session.currentStep === RegistrationStep.AWAITING_PHONE_VERIFICATION
     ) {
       session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
     }
@@ -210,7 +212,7 @@ export class RegistrationService {
     const session = await this.requireOpenSession(id);
 
     if (
-      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED ||
+      session.phoneVerificationStatus !== VerificationStatus.VERIFIED ||
       (session.currentStep !== RegistrationStep.AWAITING_PERSONAL_INFO &&
         session.currentStep !== RegistrationStep.AWAITING_EMAIL_VERIFICATION)
     ) {
@@ -236,12 +238,20 @@ export class RegistrationService {
       this.auth.bcryptSaltRounds,
     );
 
+    const organizationName =
+      session.selectedRole === UserRole.COORDINATOR_SENDER
+        ? (dto.organizationName ?? null)
+        : null;
+
     const payload: PersonalInfoPayloadV1 = {
       firstName: dto.firstName.trim(),
       lastName: dto.lastName.trim(),
       email,
       passwordHash,
       passwordPolicyVersion: PASSWORD_POLICY_VERSION,
+      ...(session.selectedRole === UserRole.COORDINATOR_SENDER
+        ? { organizationName }
+        : {}),
     };
 
     const existing =
@@ -270,37 +280,57 @@ export class RegistrationService {
     return this.sessions.save(session);
   }
 
-  async sendWhatsappVerification(id: string): Promise<RegistrationSession> {
+  async sendPhoneVerification(
+    id: string,
+    dto: RegistrationSendPhoneVerificationDto,
+  ): Promise<{
+    sent: boolean;
+    codeExpiresAt: string;
+    resendCooldownSeconds: number;
+  }> {
     const session = await this.requireOpenSession(id);
     if (!session.contactPayload) {
       throw new BadRequestException('Contact details are required first.');
     }
-    if (session.whatsappVerificationStatus === VerificationStatus.VERIFIED) {
-      return session;
+    if (session.phoneVerificationStatus === VerificationStatus.VERIFIED) {
+      return this.verification.sendPhoneVerificationCode(
+        session,
+        dto.phoneNumber.trim(),
+      );
     }
-    session.currentStep = RegistrationStep.AWAITING_WHATSAPP_VERIFICATION;
-    await this.verification.sendWhatsappCode(session);
-    return this.sessions.findOneOrFail({ where: { id: session.id } });
-  }
-
-  async resendWhatsappVerification(id: string): Promise<RegistrationSession> {
-    return this.sendWhatsappVerification(id);
-  }
-
-  async verifyWhatsappCode(
-    id: string,
-    dto: RegistrationVerifyCodeDto,
-  ): Promise<RegistrationSession> {
-    const session = await this.requireOpenSession(id);
-    const result = await this.verification.verifyWhatsappCode(
+    session.currentStep = RegistrationStep.AWAITING_PHONE_VERIFICATION;
+    return this.verification.sendPhoneVerificationCode(
       session,
+      dto.phoneNumber.trim(),
+    );
+  }
+
+  async resendPhoneVerification(
+    id: string,
+    dto: RegistrationSendPhoneVerificationDto,
+  ): Promise<{
+    sent: boolean;
+    codeExpiresAt: string;
+    resendCooldownSeconds: number;
+  }> {
+    return this.sendPhoneVerification(id, dto);
+  }
+
+  async verifyPhoneCode(
+    id: string,
+    dto: RegistrationVerifyPhoneDto,
+  ): Promise<{ verified: boolean; message?: string }> {
+    const session = await this.requireOpenSession(id);
+    const result = await this.verification.verifyPhoneCode(
+      session,
+      dto.phoneNumber.trim(),
       dto.code.trim(),
     );
-    if (result.verifiedAt) {
+    if (result.verified) {
       session.currentStep = RegistrationStep.AWAITING_PERSONAL_INFO;
       await this.sessions.save(session);
     }
-    return this.sessions.findOneOrFail({ where: { id: session.id } });
+    return result;
   }
 
   async sendEmailVerification(id: string): Promise<RegistrationSession> {
@@ -336,43 +366,6 @@ export class RegistrationService {
     return this.sessions.findOneOrFail({ where: { id: session.id } });
   }
 
-  // TODO
-  // async verifyEmail(dto: VerfiyEmailDTo): Promise<RegistrationSession> {
-  //   const ch = await this.mfa.findOne({ where: { id: dto.mfaChallengeId } });
-  //   if (!ch) {
-  //     throw new UnauthorizedException(
-  //       'Invalid or expired verification request.',
-  //     );
-  //   }
-  //   if (ch.verifiedAt !== null || ch.invalidatedAt !== null) {
-  //     throw new UnauthorizedException('This code is no longer valid.');
-  //   }
-  //   if (ch.expiresAt.getTime() <= Date.now()) {
-  //     await this.mfa.update(ch.id, { attemptCount: ch.attemptCount + 1 });
-  //     throw new UnauthorizedException(
-  //       'The code has expired. Request a new one.',
-  //     );
-  //   }
-
-  //   const user = await this.users.findOne({ where: { id: ch.userId } });
-  //   if (!user || user.accountStatus !== AccountStatus.ACTIVE) {
-  //     throw new ForbiddenException('Account is not active.');
-  //   }
-
-  //   const match = await bcrypt.compare(dto.code, ch.codeHash);
-  //   if (!match) {
-  //     await this.mfa.update(ch.id, { attemptCount: ch.attemptCount + 1 });
-  //     throw new UnauthorizedException('The code is incorrect.');
-  //   }
-
-  //   ch.verifiedAt = new Date();
-  //   await this.mfa.save(ch);
-  //   user.failedAttemptCount = 0;
-  //   user.lastLoginAt = new Date();
-  //   await this.users.save(user);
-  //   return this.authTokens.buildTokenPair(user);
-  // }
-
   async saveLocationStep(
     id: string,
     dto: RegistrationLocationStepDto,
@@ -387,14 +380,49 @@ export class RegistrationService {
       throw new BadRequestException('Location step is not available yet.');
     }
 
+    const contact =
+      session.contactPayload as unknown as ContactPayloadV1 | null;
+    const verifiedPhone = contact?.phoneNumber?.trim();
+    if (!verifiedPhone) {
+      throw new BadRequestException(
+        'Phone verification is required before saving your location.',
+      );
+    }
+    let normalizedLocationPhone: string;
+    try {
+      normalizedLocationPhone = normalizePhoneToE164(dto.phoneNumber);
+    } catch {
+      throw new BadRequestException('Phone number is not valid.');
+    }
+    if (normalizedLocationPhone !== verifiedPhone) {
+      throw new BadRequestException(
+        'The phone number must match the number verified earlier in registration.',
+      );
+    }
+
+    const cc = (dto.countryCode || '').trim().toUpperCase();
+    if (cc.length !== 2) {
+      throw new BadRequestException('Country code is required.');
+    }
+
+    validateRegistrationLocationGeography({
+      country: dto.country,
+      countryCode: cc,
+      cityTown: dto.cityTown,
+      stateProvince: dto.stateProvince,
+      stateProvinceCode: dto.stateProvinceCode,
+    });
+
     const payload: LocationPayloadV1 = {
       country: dto.country.trim(),
+      countryCode: cc,
       stateProvince: dto.stateProvince?.trim(),
+      stateProvinceCode: dto.stateProvinceCode?.trim() || undefined,
       addressLine1: dto.addressLine1.trim(),
       addressLine2: dto.addressLine2?.trim(),
       cityTown: dto.cityTown.trim(),
       zipCode: dto.zipCode?.trim(),
-      phoneNumber: dto.phoneNumber.trim(),
+      phoneNumber: normalizedLocationPhone,
     };
 
     session.locationPayload = payload as unknown as Record<string, unknown>;
@@ -473,14 +501,14 @@ export class RegistrationService {
       throw new BadRequestException('Registration data is incomplete.');
     }
     if (
-      session.whatsappVerificationStatus !== VerificationStatus.VERIFIED ||
+      session.phoneVerificationStatus !== VerificationStatus.VERIFIED ||
       session.emailVerificationStatus !== VerificationStatus.VERIFIED
     ) {
       throw new BadRequestException('Verification steps are not complete.');
     }
 
-    if (session.whatsappVerificationStatus !== VerificationStatus.VERIFIED) {
-      throw new BadRequestException('WhatsApp verification is required.');
+    if (session.phoneVerificationStatus !== VerificationStatus.VERIFIED) {
+      throw new BadRequestException('Phone verification is required.');
     }
     if (session.emailVerificationStatus !== VerificationStatus.VERIFIED) {
       throw new BadRequestException('Email verification is required.');
@@ -498,7 +526,7 @@ export class RegistrationService {
       const registrationSessions = manager.getRepository(RegistrationSession);
 
       const email = personal.email;
-      const existing = await this.users.exist({ where: { email } });
+      const existing = await users.exist({ where: { email } });
       if (existing) {
         throw new ConflictException('Email is already registered.');
       }
@@ -519,7 +547,10 @@ export class RegistrationService {
 
       const profile = profiles.create({
         userId: savedUser.id,
-        organizationName: null,
+        organizationName:
+          session.selectedRole === UserRole.COORDINATOR_SENDER
+            ? personal.organizationName ?? null
+            : null,
         country: location.country,
         stateProvince: location.stateProvince ?? null,
         addressLine1: location.addressLine1,
@@ -527,9 +558,7 @@ export class RegistrationService {
         cityTown: location.cityTown,
         zipCode: location.zipCode ?? null,
         phoneNumber: location.phoneNumber,
-        whatsappCountryCode: contact.whatsappCountryCode,
-        whatsappNumber: contact.whatsappNumber,
-        normalizedWhatsappNumber: contact.normalizedWhatsappNumber,
+        contactPhoneE164: contact.phoneNumber,
         issuingCountry:
           session.selectedRole === UserRole.RECIPIENT
             ? recipient!.issuingCountry

@@ -109,6 +109,8 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 - Data model additions:
   - `registration_sessions`: whatsapp/email verification status + sent/verified timestamps
   - `registration_verification_codes`: hashed codes, expires_at, attempt/resend counts
+- Personal-info step (`PATCH .../steps/personal-info`): optional `organizationName` for Coordinator/Sender is stored on the session and saved to `user_profiles.organization_name` at registration completion (password policy is enforced server-side; see `password-policy.ts`).
+- Location step (`PATCH .../steps/location`): country and state/province are validated with the `country-state-city` dataset; city/town is free text; `phoneNumber` in the body must match the verified contact number on the session.
 - Env configuration:
   - `REG_VERIFICATION_CODE_TTL_SECONDS`, `REG_VERIFICATION_MAX_ATTEMPTS`, `REG_VERIFICATION_MAX_RESENDS`, `REG_VERIFICATION_RESEND_COOLDOWN_SECONDS`
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` (WhatsApp), `SENDGRID_API_KEY`, `EMAIL_FROM` (email)

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { buildNormalizedWhatsappNumber } from '../auth/registration/whatsapp.util';
+import { buildNormalizedPhoneFromParts } from '../auth/registration/phone-number.util';
 import { VerificationStatus } from '../../common/enums/verification-status.enum';
 import { CreateRecipientDto } from './dto/create-recipient.dto';
 import { Recipient } from './entities/recipient.entity';
@@ -54,7 +54,7 @@ export class RecipientsService {
       );
     }
 
-    const normalizedPhone = buildNormalizedWhatsappNumber(
+    const normalizedPhone = buildNormalizedPhoneFromParts(
       dto.phoneCountryCode,
       dto.phoneNumber,
     );

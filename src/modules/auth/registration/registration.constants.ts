@@ -11,14 +11,14 @@ export const REGISTRATION_SELECTABLE_ROLES: readonly UserRole[] = [
 export const REGISTRATION_REQUEST_TYPE_COORDINATOR_SENDER =
   'coordinator_sender_account';
 
-export const PASSWORD_POLICY_VERSION = 'v1';
+export const PASSWORD_POLICY_VERSION = 'v2';
 
 export const REGISTRATION_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const RegistrationStep = {
   AWAITING_ROLE: 'awaiting_role',
   AWAITING_CONTACT: 'awaiting_contact',
-  AWAITING_WHATSAPP_VERIFICATION: 'awaiting_whatsapp_verification',
+  AWAITING_PHONE_VERIFICATION: 'awaiting_phone_verification',
   AWAITING_PERSONAL_INFO: 'awaiting_personal_info',
   AWAITING_EMAIL_VERIFICATION: 'awaiting_email_verification',
   AWAITING_LOCATION: 'awaiting_location',

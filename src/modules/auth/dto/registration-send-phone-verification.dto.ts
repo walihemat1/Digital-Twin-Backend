@@ -6,11 +6,9 @@ import {
   MinLength,
 } from 'class-validator';
 
-/** E.164: + followed by 7–15 digits (ITU-T). */
-const E164_PHONE =
-  /^\+[1-9]\d{6,14}$/;
+const E164_PHONE = /^\+[1-9]\d{6,14}$/;
 
-export class RegistrationContactStepDto {
+export class RegistrationSendPhoneVerificationDto {
   @IsNotEmpty()
   @IsString()
   @MinLength(8)

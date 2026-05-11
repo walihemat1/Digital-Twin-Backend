@@ -11,7 +11,7 @@ export class UserProfile extends BaseEntity {
   @JoinColumn({ name: 'user_id' })
   user!: User;
 
-  @Column({ name: 'organization_name', type: 'varchar', nullable: true })
+  @Column({ name: 'organization_name', type: 'varchar', length: 255, nullable: true })
   organizationName!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
@@ -35,18 +35,9 @@ export class UserProfile extends BaseEntity {
   @Column({ name: 'phone_number', type: 'varchar', nullable: true })
   phoneNumber!: string | null;
 
-  @Column({ name: 'whatsapp_country_code', type: 'varchar', nullable: true })
-  whatsappCountryCode!: string | null;
-
-  @Column({ name: 'whatsapp_number', type: 'varchar', nullable: true })
-  whatsappNumber!: string | null;
-
-  @Column({
-    name: 'normalized_whatsapp_number',
-    type: 'varchar',
-    nullable: true,
-  })
-  normalizedWhatsappNumber!: string | null;
+  /** E.164 phone collected at registration (SMS verification target). */
+  @Column({ name: 'contact_phone_e164', type: 'varchar', nullable: true })
+  contactPhoneE164!: string | null;
 
   /** Filled for Recipient accounts after registration. */
   @Column({ name: 'issuing_country', type: 'varchar', length: 120, nullable: true })

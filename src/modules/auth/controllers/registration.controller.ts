@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -11,6 +13,8 @@ import { RegistrationLocationStepDto } from '../dto/registration-location-step.d
 import { RegistrationPersonalInfoStepDto } from '../dto/registration-personal-info-step.dto';
 import { RegistrationRecipientDetailsStepDto } from '../dto/registration-recipient-details-step.dto';
 import { RegistrationCompleteDto } from '../dto/registration-complete.dto';
+import { RegistrationSendPhoneVerificationDto } from '../dto/registration-send-phone-verification.dto';
+import { RegistrationVerifyPhoneDto } from '../dto/registration-verify-phone.dto';
 import { SelectRoleDto } from '../dto/select-role.dto';
 import { RegistrationVerifyCodeDto } from '../dto/registration-verify-code.dto';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
@@ -47,10 +51,6 @@ export class RegistrationController {
     @Body() dto: RegistrationPersonalInfoStepDto,
   ) {
     return this.registration.savePersonalInfoStep(id, dto);
-    // return {
-    //   message: 'Personal info step saved',
-    //   data: dto,
-    // };
   }
 
   @Patch('registration-sessions/:id/steps/location')
@@ -69,26 +69,29 @@ export class RegistrationController {
     return this.registration.saveRecipientDetailsStep(id, dto);
   }
 
-  @Post('registration-sessions/:id/whatsapp-verification/send')
-  sendWhatsapp(
+  @Post('registration-sessions/:id/phone-verification/send')
+  sendPhoneVerification(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: RegistrationSendPhoneVerificationDto,
   ) {
-    return this.registration.sendWhatsappVerification(id);
+    return this.registration.sendPhoneVerification(id, dto);
   }
 
-  @Post('registration-sessions/:id/whatsapp-verification/resend')
-  resendWhatsapp(
+  @Post('registration-sessions/:id/phone-verification/resend')
+  resendPhoneVerification(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: RegistrationSendPhoneVerificationDto,
   ) {
-    return this.registration.resendWhatsappVerification(id);
+    return this.registration.resendPhoneVerification(id, dto);
   }
 
-  @Post('registration-sessions/:id/whatsapp-verification/verify')
-  verifyWhatsapp(
+  @Post('registration-sessions/:id/phone-verification/verify')
+  @HttpCode(HttpStatus.OK)
+  verifyPhone(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Body() dto: RegistrationVerifyCodeDto,
+    @Body() dto: RegistrationVerifyPhoneDto,
   ) {
-    return this.registration.verifyWhatsappCode(id, dto);
+    return this.registration.verifyPhoneCode(id, dto);
   }
 
   @Post('registration-sessions/:id/email-verification/send')
