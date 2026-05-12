@@ -262,6 +262,48 @@ describe('TransactionsService', () => {
     expect(out.coordinator_affirmation).toBeNull();
   });
 
+  describe('Coordinator list summaries', () => {
+    it('listForCoordinator loads recipient relation and maps names and transfer_method', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: auth.userId,
+        role: UserRole.COORDINATOR_SENDER,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = {
+        id: '11111111-1111-4111-8111-111111111111',
+        coordinatorId: auth.userId,
+        recipientId: '22222222-2222-4222-8222-222222222222',
+        brokerAUserId: 'broker-1',
+        status: TransactionStatus.PENDING,
+        amount: '10.00',
+        currency: 'USD',
+        submittedAt: new Date('2026-01-01T00:00:00.000Z'),
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        transferMethod: 'IVTS Tracker',
+        recipient: {
+          firstName: 'Faisal',
+          lastName: 'Popalzai',
+        },
+      } as unknown as Transaction;
+
+      txRepo.find.mockResolvedValue([tx]);
+
+      const out = await service.listForCoordinator(auth);
+
+      expect(txRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relations: ['recipient'],
+        }),
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0].transfer_method).toBe('IVTS Tracker');
+      expect(out[0].recipient_first_name).toBe('Faisal');
+      expect(out[0].recipient_last_name).toBe('Popalzai');
+    });
+  });
+
   describe('Broker A visibility', () => {
     const brokerAuth = { userId: 'broker-1', role: UserRole.BROKER_A };
 

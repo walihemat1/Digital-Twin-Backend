@@ -1,7 +1,7 @@
-import { Transform } from 'class-transformer';
+import { Transform, type TransformFnParams } from 'class-transformer';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 
-function trimString(value: unknown): unknown {
+function trimString({ value }: TransformFnParams): unknown {
   return typeof value === 'string' ? value.trim() : value;
 }
 

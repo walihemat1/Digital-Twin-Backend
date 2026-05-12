@@ -67,6 +67,11 @@ export type TransactionSummaryView = {
   submitted_at: Date;
   created_at: Date;
   updated_at: Date;
+  /** Present when `recipient` relation was loaded (coordinator list). */
+  recipient_first_name?: string;
+  recipient_last_name?: string;
+  /** Present on summaries built from a full `Transaction` row. */
+  transfer_method?: string;
 };
 
 export type RecipientFeedbackDetailView = {
@@ -309,6 +314,7 @@ export class TransactionsService {
   }
 
   private toSummary(tx: Transaction): TransactionSummaryView {
+    const recipient = tx.recipient;
     return {
       id: tx.id,
       coordinator_id: tx.coordinatorId,
@@ -320,6 +326,13 @@ export class TransactionsService {
       submitted_at: tx.submittedAt,
       created_at: tx.createdAt,
       updated_at: tx.updatedAt,
+      transfer_method: tx.transferMethod,
+      ...(recipient != null
+        ? {
+            recipient_first_name: recipient.firstName,
+            recipient_last_name: recipient.lastName,
+          }
+        : {}),
     };
   }
 
@@ -452,6 +465,7 @@ export class TransactionsService {
         coordinatorId: authUser.userId,
         ...(options?.status != null ? { status: options.status } : {}),
       },
+      relations: ['recipient'],
       order: { submittedAt: 'DESC' },
       skip,
       take,
