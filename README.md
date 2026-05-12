@@ -99,6 +99,11 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 
 ## adding mfa verifiction testing
 
+## Login email MFA (development)
+
+- When `NODE_ENV` is `development`, `POST /auth/login` **skips** the email MFA step and returns access/refresh tokens immediately (so local login matches production flow only through password + active account).
+- To **keep** email MFA in local dev, set `AUTH_LOGIN_MFA_ENABLED=true` in `.env`.
+
 ## Registration verification (backend)
 
 - Contact step now sends a WhatsApp verification code and blocks progression until verified. Personal info step is blocked unless WhatsApp verification succeeds.

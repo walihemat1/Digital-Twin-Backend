@@ -15,6 +15,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AffirmRecipientFeedbackDto } from './dto/affirm-recipient-feedback.dto';
+import { ListEligibleBrokerAQueryDto } from './dto/list-eligible-broker-a.query.dto';
 import { ListTransactionsQueryDto } from './dto/list-transactions.query.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { TransactionCompletionService } from './transaction-completion.service';
@@ -45,7 +46,28 @@ export class TransactionsController {
     return this.transactions.listForCoordinator(user, {
       offset: query.offset,
       limit: query.limit,
+      status: query.status,
     });
+  }
+
+  @Get('eligible-broker-a')
+  listEligibleBrokerA(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListEligibleBrokerAQueryDto,
+  ) {
+    return this.transactions.listEligibleBrokerA(user, {
+      q: query.q,
+      limit: query.limit,
+      page: query.page,
+    });
+  }
+
+  @Get(':id/history')
+  history(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.transactions.getStatusHistoryForCoordinator(user, id);
   }
 
   @Get(':id')

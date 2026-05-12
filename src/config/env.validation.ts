@@ -73,6 +73,9 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().min(8).default('dev-opaque-token-pepper'),
   }),
 
+  /** Development: set `true` to require email MFA on login (default is MFA skipped in development). */
+  AUTH_LOGIN_MFA_ENABLED: Joi.string().valid('true', 'false').optional(),
+
   MFA_CODE_TTL_SECONDS: Joi.number().integer().min(60).default(600),
   PASSWORD_RESET_TTL_SECONDS: Joi.number().integer().min(300).default(3600),
   FEEDBACK_ACCESS_TOKEN_TTL_SECONDS: Joi.number()

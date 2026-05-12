@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { DataSource, In, IsNull, Repository } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, Repository } from 'typeorm';
 import { AccountStatus } from '../../common/enums/account-status.enum';
 import { BrokerBAssignmentStatus } from '../../common/enums/broker-b-assignment-status.enum';
 import { BrokerBAssignmentType } from '../../common/enums/broker-b-assignment-type.enum';
@@ -15,6 +15,7 @@ import { TransactionStatus } from '../../common/enums/transaction-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { User } from '../users/entities/user.entity';
+import { UserProfile } from '../users/entities/user-profile.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { assertTransactionAwaitingBrokerBDeliveryConfirmation } from './broker-b-delivery.rules';
 import { assertMajorWorkflowFieldsUnlocked } from './transaction-workflow-lock.rules';
@@ -91,6 +92,25 @@ export type TransactionDetailView = TransactionSummaryView & {
   coordinator_affirmation: CoordinatorAffirmationDetailView | null;
 };
 
+/** Active Broker A account row for coordinator transaction creation (snake_case JSON). */
+export type EligibleBrokerAPublicView = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  location: string | null;
+  whatsapp_number: string | null;
+  email: string;
+  successful_transactions_count: number;
+};
+
+export type PaginatedEligibleBrokerAView = {
+  items: EligibleBrokerAPublicView[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
 @Injectable()
 export class TransactionsService {
   constructor(
@@ -114,17 +134,137 @@ export class TransactionsService {
 
   private assertFundsAccess(actor: User): void {
     if (actor.role !== UserRole.COORDINATOR_SENDER) {
-      throw new ForbiddenException('Only a coordinator/sender may manage funds.');
+      throw new ForbiddenException(
+        'Only a coordinator/sender may manage funds.',
+      );
     }
     if (actor.accountStatus !== AccountStatus.ACTIVE) {
       throw new ForbiddenException('Account is not approved for this action.');
     }
   }
 
+  private escapeIlikePattern(raw: string): string {
+    return raw.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  }
+
+  private formatBrokerLocation(
+    profile: UserProfile | undefined,
+  ): string | null {
+    if (!profile) {
+      return null;
+    }
+    const parts = [
+      profile.country?.trim(),
+      profile.stateProvince?.trim(),
+      profile.cityTown?.trim(),
+    ].filter((p): p is string => Boolean(p && p.length > 0));
+    return parts.length ? parts.join(' ') : null;
+  }
+
+  private async completedTransactionCountByBrokerIds(
+    brokerUserIds: string[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (brokerUserIds.length === 0) {
+      return map;
+    }
+    const rows = await this.transactions
+      .createQueryBuilder('t')
+      .select('t.brokerAUserId', 'brokerId')
+      .addSelect('COUNT(t.id)', 'cnt')
+      .where('t.brokerAUserId IN (:...ids)', { ids: brokerUserIds })
+      .andWhere('t.status = :st', { st: TransactionStatus.COMPLETED })
+      .groupBy('t.brokerAUserId')
+      .getRawMany<{ brokerId: string; cnt: string }>();
+    for (const row of rows) {
+      map.set(row.brokerId, Number.parseInt(row.cnt, 10));
+    }
+    return map;
+  }
+
+  /**
+   * Paginated list of active Broker A users for coordinator transaction intake (search + profile + completed tx count).
+   */
+  async listEligibleBrokerA(
+    authUser: AuthenticatedUser,
+    options?: { q?: string; limit?: number; page?: number },
+  ): Promise<PaginatedEligibleBrokerAView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertFundsAccess(actor);
+
+    const take = Math.min(Math.max(options?.limit ?? 10, 1), 50);
+    const page = Math.max(options?.page ?? 1, 1);
+    const offset = (page - 1) * take;
+
+    const qRaw = typeof options?.q === 'string' ? options.q.trim() : '';
+    const useFilter = qRaw.length >= 2;
+
+    let base = this.users
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.profile', 'p')
+      .where('u.role = :role', { role: UserRole.BROKER_A })
+      .andWhere('u.accountStatus = :act', { act: AccountStatus.ACTIVE });
+
+    if (useFilter) {
+      const pattern = `%${this.escapeIlikePattern(qRaw)}%`;
+      base = base.andWhere(
+        new Brackets((qb) => {
+          qb.where("u.firstName ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("u.lastName ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("u.email ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("p.phoneNumber ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("p.contactPhoneE164 ILIKE :pattern ESCAPE '\\'", {
+              pattern,
+            });
+        }),
+      );
+    }
+
+    const total = await base.clone().getCount();
+    const rows = await base
+      .orderBy('u.lastName', 'ASC')
+      .addOrderBy('u.firstName', 'ASC')
+      .skip(offset)
+      .take(take)
+      .getMany();
+
+    const countMap = await this.completedTransactionCountByBrokerIds(
+      rows.map((r) => r.id),
+    );
+
+    const items: EligibleBrokerAPublicView[] = rows.map((u) => {
+      const p = u.profile;
+      return {
+        id: u.id,
+        first_name: u.firstName,
+        last_name: u.lastName,
+        location: this.formatBrokerLocation(p),
+        whatsapp_number: null,
+        email: u.email,
+        successful_transactions_count: countMap.get(u.id) ?? 0,
+      };
+    });
+
+    const totalPages = Math.max(1, Math.ceil(total / take));
+
+    return {
+      items,
+      total,
+      page,
+      limit: take,
+      totalPages,
+    };
+  }
+
   /** Explicit Broker A read gate: role + active account (mirrors coordinator funds checks). */
   private assertBrokerAReadAccess(actor: User): void {
     if (actor.role !== UserRole.BROKER_A) {
-      throw new ForbiddenException('Only Broker A may view assigned transactions.');
+      throw new ForbiddenException(
+        'Only Broker A may view assigned transactions.',
+      );
     }
     if (actor.accountStatus !== AccountStatus.ACTIVE) {
       throw new ForbiddenException('Account is not approved for this action.');
@@ -134,7 +274,9 @@ export class TransactionsService {
   /** Internal Broker B read gate (permissions model §7.2). */
   private assertBrokerBReadAccess(actor: User): void {
     if (actor.role !== UserRole.BROKER_B) {
-      throw new ForbiddenException('Only Broker B may view assigned transactions.');
+      throw new ForbiddenException(
+        'Only Broker B may view assigned transactions.',
+      );
     }
     if (actor.accountStatus !== AccountStatus.ACTIVE) {
       throw new ForbiddenException('Account is not approved for this action.');
@@ -142,7 +284,10 @@ export class TransactionsService {
   }
 
   private isBrokerADeclineReasonRequired(): boolean {
-    return this.config.get<boolean>('transactionWorkflow.brokerADeclineReasonRequired', false);
+    return this.config.get<boolean>(
+      'transactionWorkflow.brokerADeclineReasonRequired',
+      false,
+    );
   }
 
   private normalizeDeclineReason(dto?: BrokerADeclineDto): string | null {
@@ -150,7 +295,9 @@ export class TransactionsService {
     return raw && raw.length > 0 ? raw : null;
   }
 
-  private toHistoryView(row: TransactionStatusHistory): TransactionStatusHistoryView {
+  private toHistoryView(
+    row: TransactionStatusHistory,
+  ): TransactionStatusHistoryView {
     return {
       id: row.id,
       from_status: row.fromStatus,
@@ -237,7 +384,9 @@ export class TransactionsService {
       throw new BadRequestException('Broker A user not found.');
     }
     if (brokerA.role !== UserRole.BROKER_A) {
-      throw new BadRequestException('Selected user is not an eligible Broker A.');
+      throw new BadRequestException(
+        'Selected user is not an eligible Broker A.',
+      );
     }
     if (brokerA.accountStatus !== AccountStatus.ACTIVE) {
       throw new BadRequestException('Broker A account is not active.');
@@ -287,7 +436,7 @@ export class TransactionsService {
 
   async listForCoordinator(
     authUser: AuthenticatedUser,
-    options?: { offset?: number; limit?: number },
+    options?: { offset?: number; limit?: number; status?: TransactionStatus },
   ): Promise<TransactionSummaryView[]> {
     const actor = await this.users.findOne({ where: { id: authUser.userId } });
     if (!actor) {
@@ -299,7 +448,10 @@ export class TransactionsService {
     const skip = Math.max(options?.offset ?? 0, 0);
 
     const rows = await this.transactions.find({
-      where: { coordinatorId: authUser.userId },
+      where: {
+        coordinatorId: authUser.userId,
+        ...(options?.status != null ? { status: options.status } : {}),
+      },
       order: { submittedAt: 'DESC' },
       skip,
       take,
@@ -339,6 +491,29 @@ export class TransactionsService {
       recipientFeedback: feedback,
       coordinatorAffirmation: affirmation,
     });
+  }
+
+  async getStatusHistoryForCoordinator(
+    authUser: AuthenticatedUser,
+    id: string,
+  ): Promise<TransactionStatusHistoryView[]> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertFundsAccess(actor);
+
+    const tx = await this.transactions.findOne({ where: { id } });
+    if (!tx || tx.coordinatorId !== authUser.userId) {
+      throw new NotFoundException('Transaction not found.');
+    }
+
+    const history = await this.statusHistory.find({
+      where: { transactionId: tx.id },
+      order: { createdAt: 'ASC' },
+    });
+
+    return history.map((h) => this.toHistoryView(h));
   }
 
   async listForBrokerA(
@@ -449,7 +624,10 @@ export class TransactionsService {
       },
     });
 
-    if (!assignment || !BROKER_B_VISIBLE_TRANSACTION_STATUSES.includes(tx.status)) {
+    if (
+      !assignment ||
+      !BROKER_B_VISIBLE_TRANSACTION_STATUSES.includes(tx.status)
+    ) {
       throw new NotFoundException('Transaction not found.');
     }
 

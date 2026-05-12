@@ -1,15 +1,19 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import type { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import authConfig from '../../../config/auth.config';
 import { AccountStatus } from '../../../common/enums/account-status.enum';
 import { normalizeEmail } from '../../../common/utils/normalization.util';
 import { User } from '../../users/entities/user.entity';
 import { LoginDto } from '../dto/login.dto';
+import { AuthTokensService } from './auth-tokens.service';
 import { MfaChallengeService } from './mfa-challenge.service';
 
 @Injectable()
@@ -18,6 +22,9 @@ export class AuthLoginService {
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly mfa: MfaChallengeService,
+    private readonly authTokens: AuthTokensService,
+    @Inject(authConfig.KEY)
+    private readonly authCfg: ConfigType<typeof authConfig>,
   ) {}
 
   async login(dto: LoginDto) {
@@ -37,6 +44,13 @@ export class AuthLoginService {
 
     if (user.accountStatus !== AccountStatus.ACTIVE) {
       throw this.forbiddenForStatus(user.accountStatus);
+    }
+
+    if (this.authCfg.loginSkipEmailMfa) {
+      user.failedAttemptCount = 0;
+      user.lastLoginAt = new Date();
+      await this.users.save(user);
+      return this.authTokens.buildTokenPair(user);
     }
 
     return this.mfa.startLoginMfa(user);

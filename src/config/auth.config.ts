@@ -45,6 +45,14 @@ const authConfig = registerAs('auth', () => ({
   /** Legacy SMS sender; unused by Twilio Verify registration flow. */
   twilioFromNumber: process.env.TWILIO_FROM_NUMBER ?? '',
   twilioVerifyServiceSid: process.env.TWILIO_VERIFY_SERVICE_SID ?? '',
+  /**
+   * Development only: when `NODE_ENV` is `development` and this is not `true`,
+   * `POST /auth/login` returns access/refresh tokens immediately (no email MFA step).
+   * Set `AUTH_LOGIN_MFA_ENABLED=true` in `.env` to keep email MFA locally.
+   */
+  loginSkipEmailMfa:
+    process.env.NODE_ENV === 'development' &&
+    process.env.AUTH_LOGIN_MFA_ENABLED !== 'true',
 }));
 
 export type AuthConfigValues = ReturnType<typeof authConfig>;

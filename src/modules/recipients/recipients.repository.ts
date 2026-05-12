@@ -19,6 +19,14 @@ export class RecipientsRepository {
     return this.repo.findOne({ where: { id, isActive: true } });
   }
 
+  async findActiveByNormalizedPhone(
+    normalizedPhone: string,
+  ): Promise<Recipient | null> {
+    return this.repo.findOne({
+      where: { normalizedPhone, isActive: true },
+    });
+  }
+
   /**
    * Active recipient whose verification is not terminal-negative for receiving funds.
    */
@@ -35,30 +43,47 @@ export class RecipientsRepository {
   }
 
   /**
-   * Active recipients only; matches name or normalized phone (partial, case-insensitive for names).
+   * Active recipients only; matches name, phone, or email (partial, case-insensitive for text fields).
    */
-  async searchActiveByQuery(
+  async searchActiveByQueryPaged(
     rawQuery: string,
     limit: number,
-  ): Promise<Recipient[]> {
+    page: number,
+  ): Promise<{ items: Recipient[]; total: number }> {
     const q = rawQuery.trim();
-    const escaped = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const pattern = `%${escaped}%`;
+    const safePage = Math.max(page, 1);
+    const offset = (safePage - 1) * limit;
 
-    return this.repo
-      .createQueryBuilder('r')
-      .where('r.is_active = true')
-      .andWhere(
+    let base = this.repo.createQueryBuilder('r').where('r.is_active = true');
+
+    if (q.length >= 2) {
+      const escaped = q
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+      const pattern = `%${escaped}%`;
+      base = base.andWhere(
         new Brackets((qb) => {
           qb.where('r.first_name ILIKE :pattern ESCAPE \'\\\'', { pattern })
             .orWhere('r.last_name ILIKE :pattern ESCAPE \'\\\'', { pattern })
             .orWhere('r.normalized_phone ILIKE :pattern ESCAPE \'\\\'', {
               pattern,
+            })
+            .orWhere('r.email ILIKE :pattern ESCAPE \'\\\'', { pattern })
+            .orWhere('r.whatsapp_number ILIKE :pattern ESCAPE \'\\\'', {
+              pattern,
             });
         }),
-      )
+      );
+    }
+
+    const total = await base.clone().getCount();
+    const items = await base
       .orderBy('r.updated_at', 'DESC')
+      .skip(offset)
       .take(limit)
       .getMany();
+
+    return { items, total };
   }
 }
