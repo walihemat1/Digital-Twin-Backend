@@ -40,7 +40,7 @@ describe('TransactionsService', () => {
     Pick<Repository<CoordinatorAffirmation>, 'findOne'>
   >;
   let recipientsRepo: jest.Mocked<
-    Pick<RecipientsRepository, 'findEligibleForTransactionById'>
+    Pick<RecipientsRepository, 'findEligibleForTransactionForUser'>
   >;
   let configSvc: { get: jest.Mock };
   let workflowHooks: {
@@ -72,7 +72,7 @@ describe('TransactionsService', () => {
     brokerBAssignmentsRepo = { findOne: jest.fn() };
     recipientFeedbackRepo = { findOne: jest.fn() };
     coordinatorAffirmationsRepo = { findOne: jest.fn() };
-    recipientsRepo = { findEligibleForTransactionById: jest.fn() };
+    recipientsRepo = { findEligibleForTransactionForUser: jest.fn() };
     dataSource = {
       transaction: jest.fn(),
     };
@@ -128,7 +128,7 @@ describe('TransactionsService', () => {
       role: UserRole.COORDINATOR_SENDER,
       accountStatus: AccountStatus.ACTIVE,
     } as User);
-    recipientsRepo.findEligibleForTransactionById.mockResolvedValue(null);
+    recipientsRepo.findEligibleForTransactionForUser.mockResolvedValue(null);
 
     await expect(service.submit(auth, baseSubmit as any)).rejects.toBeInstanceOf(
       BadRequestException,
@@ -148,7 +148,7 @@ describe('TransactionsService', () => {
         accountStatus: AccountStatus.ACTIVE,
       } as User);
 
-    recipientsRepo.findEligibleForTransactionById.mockResolvedValue({
+    recipientsRepo.findEligibleForTransactionForUser.mockResolvedValue({
       id: 'rec-1',
     } as any);
 
@@ -170,7 +170,7 @@ describe('TransactionsService', () => {
         accountStatus: AccountStatus.SUSPENDED,
       } as User);
 
-    recipientsRepo.findEligibleForTransactionById.mockResolvedValue({
+    recipientsRepo.findEligibleForTransactionForUser.mockResolvedValue({
       id: 'rec-1',
     } as any);
 
@@ -192,7 +192,7 @@ describe('TransactionsService', () => {
         accountStatus: AccountStatus.ACTIVE,
       } as User);
 
-    recipientsRepo.findEligibleForTransactionById.mockResolvedValue({
+    recipientsRepo.findEligibleForTransactionForUser.mockResolvedValue({
       id: 'rec-1',
       verificationStatus: VerificationStatus.UNVERIFIED,
     } as any);

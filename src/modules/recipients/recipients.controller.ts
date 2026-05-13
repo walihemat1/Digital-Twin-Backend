@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -14,15 +16,21 @@ export class RecipientsController {
   constructor(private readonly recipients: RecipientsService) {}
 
   @Get('search')
-  search(@Query() query: SearchRecipientsQueryDto) {
+  search(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SearchRecipientsQueryDto,
+  ) {
     const limit = query.limit ?? 10;
     const page = query.page ?? 1;
     const q = typeof query.q === 'string' ? query.q.trim() : '';
-    return this.recipients.searchPaged(q, { limit, page });
+    return this.recipients.searchPaged(q, { limit, page }, user);
   }
 
   @Post()
-  create(@Body() body: CreateRecipientDto) {
-    return this.recipients.create(body);
+  create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: CreateRecipientDto,
+  ) {
+    return this.recipients.create(body, user);
   }
 }

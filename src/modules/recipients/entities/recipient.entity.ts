@@ -1,10 +1,12 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
+import { User } from '../../users/entities/user.entity';
 import { VerificationStatus } from '../../../common/enums/verification-status.enum';
 import { BaseEntity } from '../../../common/persistence/base.entity';
 
 @Entity('recipients')
 @Index('IDX_recipients_normalized_phone', ['normalizedPhone'])
 @Index('IDX_recipients_verification_status', ['verificationStatus'])
+@Index('IDX_recipients_created_by_user_id', ['createdByUserId'])
 export class Recipient extends BaseEntity {
   @Column({ name: 'first_name', type: 'varchar', length: 255 })
   firstName!: string;
@@ -66,4 +68,11 @@ export class Recipient extends BaseEntity {
 
   @Column({ name: 'zip_code', type: 'varchar', length: 32, nullable: true })
   zipCode!: string | null;
+
+  @Column({ name: 'created_by_user_id', type: 'uuid', nullable: true })
+  createdByUserId!: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'created_by_user_id' })
+  createdBy?: User | null;
 }
