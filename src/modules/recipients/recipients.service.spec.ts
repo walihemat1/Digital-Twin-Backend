@@ -1,5 +1,11 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { VerificationStatus } from '../../common/enums/verification-status.enum';
+import { UserRole } from '../../common/enums/user-role.enum';
+import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { Recipient } from './entities/recipient.entity';
 import { RecipientIdentityCryptoService } from './recipient-identity-crypto.service';
 import { RecipientsRepository } from './recipients.repository';
@@ -13,11 +19,23 @@ describe('RecipientsService', () => {
       | 'save'
       | 'searchActiveByQueryPaged'
       | 'findActiveByNormalizedPhone'
+      | 'isRecipientVisibleToCoordinatorUser'
     >
   >;
   let crypto: jest.Mocked<
     Pick<RecipientIdentityCryptoService, 'encrypt' | 'decrypt'>
   >;
+  let usersRepo: { findOne: jest.Mock };
+
+  const coordinatorAuth: AuthenticatedUser = {
+    userId: 'coord-1',
+    role: UserRole.COORDINATOR_SENDER,
+  };
+
+  const adminAuth: AuthenticatedUser = {
+    userId: 'admin-1',
+    role: UserRole.ADMIN,
+  };
 
   const baseCreateDto = {
     firstName: 'Ann',
@@ -35,44 +53,65 @@ describe('RecipientsService', () => {
       save: jest.fn(),
       searchActiveByQueryPaged: jest.fn(),
       findActiveByNormalizedPhone: jest.fn().mockResolvedValue(null),
+      isRecipientVisibleToCoordinatorUser: jest.fn().mockResolvedValue(false),
     };
     crypto = { encrypt: jest.fn(), decrypt: jest.fn() };
+    usersRepo = { findOne: jest.fn() };
     service = new RecipientsService(
       repo as RecipientsRepository,
       crypto as unknown as RecipientIdentityCryptoService,
+      usersRepo as any,
     );
   });
 
   it('create rejects mismatched identity pair', async () => {
     await expect(
-      service.create({
-        ...baseCreateDto,
-        issuingCountry: 'US',
-      } as any),
+      service.create(
+        {
+          ...baseCreateDto,
+          issuingCountry: 'US',
+        } as any,
+        coordinatorAuth,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     await expect(
-      service.create({
-        ...baseCreateDto,
-        identificationNumber: 'X123',
-      } as any),
+      service.create(
+        {
+          ...baseCreateDto,
+          identificationNumber: 'X123',
+        } as any,
+        coordinatorAuth,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('create rejects mismatched WhatsApp pair', async () => {
     await expect(
-      service.create({
-        ...baseCreateDto,
-        whatsappCountryCode: '+1',
-      } as any),
+      service.create(
+        {
+          ...baseCreateDto,
+          whatsappCountryCode: '+1',
+        } as any,
+        coordinatorAuth,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('create rejects duplicate phone', async () => {
+  it('create rejects duplicate phone when coordinator can see the profile', async () => {
     repo.findActiveByNormalizedPhone.mockResolvedValue({ id: 'x' } as Recipient);
-    await expect(service.create(baseCreateDto as any)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    repo.isRecipientVisibleToCoordinatorUser.mockResolvedValue(true);
+    await expect(
+      service.create(baseCreateDto as any, coordinatorAuth),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('create rejects duplicate phone hidden from coordinator with forbidden', async () => {
+    repo.findActiveByNormalizedPhone.mockResolvedValue({ id: 'x' } as Recipient);
+    repo.isRecipientVisibleToCoordinatorUser.mockResolvedValue(false);
+    await expect(
+      service.create(baseCreateDto as any, coordinatorAuth),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('create encrypts identification and normalizes phone', async () => {
@@ -87,24 +126,28 @@ describe('RecipientsService', () => {
       return e as Recipient;
     });
 
-    const out = await service.create({
-      ...baseCreateDto,
-      stateProvinceCode: 'AZ',
-      issuingCountry: 'US',
-      identificationNumber: 'ID-9',
-    });
+    const out = await service.create(
+      {
+        ...baseCreateDto,
+        stateProvinceCode: 'AZ',
+        issuingCountry: 'US',
+        identificationNumber: 'ID-9',
+      },
+      coordinatorAuth,
+    );
 
     expect(crypto.encrypt).toHaveBeenCalledWith('ID-9');
     expect(repo.save).toHaveBeenCalled();
     const arg = repo.save.mock.calls[0][0] as Recipient;
     expect(arg.normalizedPhone).toBe('+15551234567');
     expect(arg.identificationNumberEncrypted).toBe('v1:enc');
+    expect(arg.createdByUserId).toBe('coord-1');
     expect(out.id).toBe('r1');
     expect(out).not.toHaveProperty('identification_number_encrypted');
     expect(out.identification_number).toBe('ID-9');
   });
 
-  it('searchPaged maps repository rows to public views', async () => {
+  it('searchPaged maps repository rows to public views for coordinator', async () => {
     const row = Object.assign(new Recipient(), {
       id: 'r2',
       firstName: 'Bo',
@@ -129,14 +172,19 @@ describe('RecipientsService', () => {
     });
     repo.searchActiveByQueryPaged.mockResolvedValue({ items: [row], total: 1 });
 
-    const out = await service.searchPaged('bo', { limit: 10, page: 1 });
+    const out = await service.searchPaged('bo', { limit: 10, page: 1 }, coordinatorAuth);
 
-    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('bo', 10, 1);
+    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('bo', 10, 1, {
+      mode: 'user',
+      userId: 'coord-1',
+    });
     expect(out.items).toHaveLength(1);
 
     repo.searchActiveByQueryPaged.mockResolvedValue({ items: [], total: 0 });
-    const emptyOut = await service.searchPaged('', { limit: 10, page: 1 });
-    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('', 10, 1);
+    const emptyOut = await service.searchPaged('', { limit: 10, page: 1 }, adminAuth);
+    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('', 10, 1, {
+      mode: 'admin',
+    });
     expect(emptyOut.items).toHaveLength(0);
     expect(emptyOut.total).toBe(0);
     expect(out.total).toBe(1);

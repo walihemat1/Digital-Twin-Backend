@@ -383,12 +383,13 @@ export class TransactionsService {
     }
     this.assertFundsAccess(actor);
 
-    const recipient = await this.recipients.findEligibleForTransactionById(
+    const recipient = await this.recipients.findEligibleForTransactionForUser(
       dto.recipientId,
+      { mode: 'user', userId: authUser.userId },
     );
     if (!recipient) {
       throw new BadRequestException(
-        'Recipient not found, inactive, or not eligible for transactions.',
+        'Recipient not found, inactive, not visible to your account, or not eligible for transactions.',
       );
     }
 
@@ -1005,12 +1006,13 @@ export class TransactionsService {
     }
     this.assertFundsAccess(actor);
 
-    const recipient = await this.recipients.findEligibleForTransactionById(
+    const recipient = await this.recipients.findEligibleForTransactionForUser(
       dto.recipientId,
+      { mode: 'user', userId: authUser.userId },
     );
     if (!recipient) {
       throw new BadRequestException(
-        'Recipient not found, inactive, or not eligible for transactions.',
+        'Recipient not found, inactive, not visible to your account, or not eligible for transactions.',
       );
     }
 
