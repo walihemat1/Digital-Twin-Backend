@@ -1057,7 +1057,9 @@ export class TransactionsService {
       throw new BadRequestException('Broker A user not found.');
     }
     if (brokerA.role !== UserRole.BROKER_A) {
-      throw new BadRequestException('Selected user is not an eligible Broker A.');
+      throw new BadRequestException(
+        'Selected user is not an eligible Broker A.',
+      );
     }
     if (brokerA.accountStatus !== AccountStatus.ACTIVE) {
       throw new BadRequestException('Broker A account is not active.');
