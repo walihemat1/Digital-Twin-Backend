@@ -22,6 +22,8 @@ import { assertMajorWorkflowFieldsUnlocked } from './transaction-workflow-lock.r
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { BrokerBConfirmDeliveryDto } from './dto/broker-b-confirm-delivery.dto';
+import { CoordinatorChangeBrokerADto } from './dto/coordinator-change-broker-a.dto';
+import { CoordinatorChangeRecipientDto } from './dto/coordinator-change-recipient.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
@@ -484,7 +486,10 @@ export class TransactionsService {
     }
     this.assertFundsAccess(actor);
 
-    const tx = await this.transactions.findOne({ where: { id } });
+    const tx = await this.transactions.findOne({
+      where: { id },
+      relations: ['recipient'],
+    });
     if (!tx || tx.coordinatorId !== authUser.userId) {
       throw new NotFoundException('Transaction not found.');
     }
@@ -945,5 +950,141 @@ export class TransactionsService {
 
     await this.workflowHooks.onBrokerBDeliveryConfirmed(savedForHook);
     return detail;
+  }
+
+  async coordinatorCancel(
+    authUser: AuthenticatedUser,
+    id: string,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertFundsAccess(actor);
+
+    await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+      const row = await txRepo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row || row.coordinatorId !== authUser.userId) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      if (row.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(
+          'Only a pending transfer can be cancelled from here.',
+        );
+      }
+      row.status = TransactionStatus.CANCELLED;
+      await txRepo.save(row);
+
+      const hist = histRepo.create({
+        transactionId: row.id,
+        fromStatus: TransactionStatus.PENDING,
+        toStatus: TransactionStatus.CANCELLED,
+        changedByUserId: authUser.userId,
+        changeReason: 'Cancelled by coordinator.',
+        metadata: null,
+      });
+      await histRepo.save(hist);
+    });
+
+    return this.getDetailForCoordinator(authUser, id);
+  }
+
+  async coordinatorChangeRecipient(
+    authUser: AuthenticatedUser,
+    id: string,
+    dto: CoordinatorChangeRecipientDto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertFundsAccess(actor);
+
+    const recipient = await this.recipients.findEligibleForTransactionById(
+      dto.recipientId,
+    );
+    if (!recipient) {
+      throw new BadRequestException(
+        'Recipient not found, inactive, or not eligible for transactions.',
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const row = await txRepo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row || row.coordinatorId !== authUser.userId) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      assertMajorWorkflowFieldsUnlocked(row);
+      if (row.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(
+          'Recipient can only be changed while the transfer is pending.',
+        );
+      }
+      if (row.recipientId === dto.recipientId) {
+        throw new BadRequestException('This recipient is already assigned.');
+      }
+      row.recipientId = dto.recipientId;
+      await txRepo.save(row);
+    });
+
+    return this.getDetailForCoordinator(authUser, id);
+  }
+
+  async coordinatorChangeBrokerA(
+    authUser: AuthenticatedUser,
+    id: string,
+    dto: CoordinatorChangeBrokerADto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertFundsAccess(actor);
+
+    const brokerA = await this.users.findOne({
+      where: { id: dto.brokerAUserId },
+    });
+    if (!brokerA) {
+      throw new BadRequestException('Broker A user not found.');
+    }
+    if (brokerA.role !== UserRole.BROKER_A) {
+      throw new BadRequestException('Selected user is not an eligible Broker A.');
+    }
+    if (brokerA.accountStatus !== AccountStatus.ACTIVE) {
+      throw new BadRequestException('Broker A account is not active.');
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const row = await txRepo.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row || row.coordinatorId !== authUser.userId) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      assertMajorWorkflowFieldsUnlocked(row);
+      if (row.status !== TransactionStatus.PENDING) {
+        throw new BadRequestException(
+          'Intermediary can only be changed while the transfer is pending.',
+        );
+      }
+      if (row.brokerAUserId === dto.brokerAUserId) {
+        throw new BadRequestException('This intermediary is already assigned.');
+      }
+      row.brokerAUserId = dto.brokerAUserId;
+      await txRepo.save(row);
+    });
+
+    return this.getDetailForCoordinator(authUser, id);
   }
 }
