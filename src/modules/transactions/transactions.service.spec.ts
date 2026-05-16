@@ -12,8 +12,10 @@ import { TransactionStatus } from '../../common/enums/transaction-status.enum';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { VerificationStatus } from '../../common/enums/verification-status.enum';
 import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
+import { Recipient } from '../recipients/entities/recipient.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
 import { User } from '../users/entities/user.entity';
+import { UserProfile } from '../users/entities/user-profile.entity';
 import { CoordinatorAffirmation } from './entities/coordinator-affirmation.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
 import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
@@ -29,7 +31,9 @@ describe('TransactionsService', () => {
   let histRepo: jest.Mocked<
     Pick<Repository<TransactionStatusHistory>, 'find' | 'save'>
   >;
-  let usersRepo: jest.Mocked<Pick<Repository<User>, 'findOne'>>;
+  let usersRepo: jest.Mocked<
+    Pick<Repository<User>, 'findOne' | 'createQueryBuilder'>
+  >;
   let brokerBAssignmentsRepo: jest.Mocked<
     Pick<Repository<TransactionBrokerBAssignment>, 'findOne'>
   >;
@@ -47,6 +51,8 @@ describe('TransactionsService', () => {
     onBrokerAAccepted: jest.Mock;
     onBrokerADeclined: jest.Mock;
     onBrokerAReadyForBrokerB: jest.Mock;
+    onBrokerBAccepted: jest.Mock;
+    onBrokerBDeclined: jest.Mock;
     onBrokerBDeliveryConfirmed: jest.Mock;
   };
 
@@ -68,7 +74,7 @@ describe('TransactionsService', () => {
       createQueryBuilder: jest.fn(),
     };
     histRepo = { find: jest.fn(), save: jest.fn() };
-    usersRepo = { findOne: jest.fn() };
+    usersRepo = { findOne: jest.fn(), createQueryBuilder: jest.fn() };
     brokerBAssignmentsRepo = { findOne: jest.fn() };
     recipientFeedbackRepo = { findOne: jest.fn() };
     coordinatorAffirmationsRepo = { findOne: jest.fn() };
@@ -76,11 +82,21 @@ describe('TransactionsService', () => {
     dataSource = {
       transaction: jest.fn(),
     };
-    configSvc = { get: jest.fn().mockReturnValue(false) };
+    configSvc = {
+      get: jest.fn((key: string, defaultValue?: unknown) => {
+        if (key === 'auth.bcryptSaltRounds') return 4;
+        if (key === 'transactionWorkflow.brokerBDeliveryAuthCodeTtlMinutes') {
+          return 60;
+        }
+        return defaultValue ?? false;
+      }),
+    };
     workflowHooks = {
       onBrokerAAccepted: jest.fn().mockResolvedValue(undefined),
       onBrokerADeclined: jest.fn().mockResolvedValue(undefined),
       onBrokerAReadyForBrokerB: jest.fn().mockResolvedValue(undefined),
+      onBrokerBAccepted: jest.fn().mockResolvedValue(undefined),
+      onBrokerBDeclined: jest.fn().mockResolvedValue(undefined),
       onBrokerBDeliveryConfirmed: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -307,6 +323,49 @@ describe('TransactionsService', () => {
   describe('Broker A visibility', () => {
     const brokerAuth = { userId: 'broker-1', role: UserRole.BROKER_A };
 
+    it('listEligibleBrokerB returns active Broker B directory rows for Broker A', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerAuth.userId,
+        role: UserRole.BROKER_A,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const brokerB = Object.assign(new User(), {
+        id: 'bb-1',
+        firstName: 'Jane',
+        lastName: 'Broker',
+        email: 'j@example.com',
+        profile: Object.assign(new UserProfile(), {
+          contactPhoneE164: '+15551234567',
+        }),
+      });
+
+      const qb = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([brokerB]),
+        clone: jest.fn().mockReturnValue({
+          getCount: jest.fn().mockResolvedValue(1),
+        }),
+      };
+      usersRepo.createQueryBuilder = jest.fn().mockReturnValue(qb);
+
+      const out = await service.listEligibleBrokerB(brokerAuth, {
+        page: 1,
+        limit: 50,
+      });
+
+      expect(usersRepo.createQueryBuilder).toHaveBeenCalledWith('u');
+      expect(out.items).toHaveLength(1);
+      expect(out.items[0].first_name).toBe('Jane');
+      expect(out.items[0].phone_number).toBe('+15551234567');
+    });
+
     it('listForBrokerA rejects user that is not Broker A', async () => {
       usersRepo.findOne.mockResolvedValue({
         id: brokerAuth.userId,
@@ -440,6 +499,7 @@ describe('TransactionsService', () => {
     const mockListQueryBuilder = (rows: Transaction[]) => {
       const qb = {
         innerJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
@@ -495,6 +555,14 @@ describe('TransactionsService', () => {
         submittedAt: new Date(),
         createdAt: new Date(),
         updatedAt: new Date(),
+        recipient: Object.assign(new Recipient(), {
+          firstName: 'Jane',
+          lastName: 'Recipient',
+        }),
+        coordinator: Object.assign(new User(), {
+          firstName: 'Sam',
+          lastName: 'Coordinator',
+        }),
       });
 
       const qb = mockListQueryBuilder([mine]);
@@ -502,6 +570,8 @@ describe('TransactionsService', () => {
       const out = await service.listForBrokerB(brokerBAuth, { offset: 0, limit: 10 });
 
       expect(txRepo.createQueryBuilder).toHaveBeenCalledWith('tx');
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('tx.recipient', 'recipient');
+      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('tx.coordinator', 'coordinator');
       expect(qb.innerJoin).toHaveBeenCalledWith(
         TransactionBrokerBAssignment,
         'bba',
@@ -533,6 +603,10 @@ describe('TransactionsService', () => {
       expect(qb.take).toHaveBeenCalledWith(10);
       expect(out).toHaveLength(1);
       expect(out[0].id).toBe('t-bb-1');
+      expect(out[0].recipient_first_name).toBe('Jane');
+      expect(out[0].recipient_last_name).toBe('Recipient');
+      expect(out[0].coordinator_first_name).toBe('Sam');
+      expect(out[0].coordinator_last_name).toBe('Coordinator');
     });
 
     it('getDetailForBrokerB returns NotFound when transaction has no open internal assignment', async () => {
@@ -629,6 +703,148 @@ describe('TransactionsService', () => {
       expect(out.id).toBe(tx.id);
       expect(out.status).toBe(TransactionStatus.AWAITING_BROKER_B);
       expect(out.status_history).toHaveLength(1);
+      expect(out.broker_b_assignment).toMatchObject({
+        id: 'asg-1',
+        assignment_status: BrokerBAssignmentStatus.ASSIGNED,
+      });
+    });
+  });
+
+  describe('Broker B accept and decline', () => {
+    const brokerBAuth = { userId: 'broker-b-1', role: UserRole.BROKER_B };
+
+    const awaitingBrokerBTransaction = () =>
+      Object.assign(new Transaction(), {
+        id: 't-bb-accept',
+        coordinatorId: 'c1',
+        recipientId: 'r1',
+        brokerAUserId: 'broker-a-1',
+        transferMethod: 'bank',
+        verificationMethod: 'sms',
+        description: null,
+        status: TransactionStatus.AWAITING_BROKER_B,
+        currentStage: null,
+        amount: '100.00',
+        currency: 'USD',
+        submittedAt: new Date(),
+        deliveryConfirmedAt: null,
+        completedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+    const assignedBrokerBAssignment = (): TransactionBrokerBAssignment =>
+      Object.assign(new TransactionBrokerBAssignment(), {
+        id: 'asg-bb-accept',
+        transactionId: 't-bb-accept',
+        assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+        internalUserId: brokerBAuth.userId,
+        externalContactId: null,
+        assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        assignedAt: new Date(),
+        respondedAt: null,
+        declineReason: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+    it('brokerBAccept updates status, assignment, auth code, and history', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerBAuth.userId,
+        role: UserRole.BROKER_B,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = awaitingBrokerBTransaction();
+      const assignment = assignedBrokerBAssignment();
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(tx),
+        save: jest.fn().mockImplementation(async (row) => row),
+      };
+      const assignRepoMock = {
+        findOne: jest.fn().mockResolvedValue(assignment),
+        save: jest.fn().mockImplementation(async (row) => row),
+      };
+      const codeRepoMock = {
+        update: jest.fn().mockResolvedValue({ affected: 0 }),
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockImplementation(async (row) => row),
+      };
+      const histRepoMock = {
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockResolvedValue(undefined),
+        find: jest.fn().mockResolvedValue([]),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionBrokerBAssignment) return assignRepoMock;
+            if (entity === TransactionAuthCode) return codeRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      const out = await service.brokerBAccept(brokerBAuth, tx.id);
+
+      expect(out.status).toBe(TransactionStatus.BROKER_B_ACCEPTED);
+      expect(assignment.assignmentStatus).toBe(BrokerBAssignmentStatus.ACCEPTED);
+      expect(codeRepoMock.save).toHaveBeenCalled();
+      expect(workflowHooks.onBrokerBAccepted).toHaveBeenCalled();
+    });
+
+    it('brokerBDecline updates status, assignment, and history', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: brokerBAuth.userId,
+        role: UserRole.BROKER_B,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = awaitingBrokerBTransaction();
+      const assignment = assignedBrokerBAssignment();
+
+      const txRepoMock = {
+        findOne: jest.fn().mockResolvedValue(tx),
+        save: jest.fn().mockImplementation(async (row) => row),
+      };
+      const assignRepoMock = {
+        findOne: jest.fn().mockResolvedValue(assignment),
+        save: jest.fn().mockImplementation(async (row) => row),
+      };
+      const histRepoMock = {
+        create: jest.fn().mockImplementation((row) => row),
+        save: jest.fn().mockResolvedValue(undefined),
+        find: jest.fn().mockResolvedValue([]),
+      };
+
+      dataSource.transaction.mockImplementation(async (fn: any) => {
+        const manager = {
+          getRepository: (entity: unknown) => {
+            if (entity === Transaction) return txRepoMock;
+            if (entity === TransactionBrokerBAssignment) return assignRepoMock;
+            if (entity === TransactionStatusHistory) return histRepoMock;
+            throw new Error('unexpected entity');
+          },
+        };
+        return fn(manager);
+      });
+
+      const out = await service.brokerBDecline(brokerBAuth, tx.id, {
+        reason: 'unavailable',
+      });
+
+      expect(out.status).toBe(TransactionStatus.BROKER_B_DECLINED);
+      expect(assignment.assignmentStatus).toBe(BrokerBAssignmentStatus.DECLINED);
+      expect(assignment.declineReason).toBe('unavailable');
+      expect(workflowHooks.onBrokerBDeclined).toHaveBeenCalledWith(
+        expect.any(Transaction),
+        'unavailable',
+      );
     });
   });
 
@@ -1310,7 +1526,10 @@ describe('TransactionsService', () => {
         updatedAt: new Date(),
       });
 
+    const brokerBUserId = '550e8400-e29b-41d4-a716-446655440001';
+
     const validDto = {
+      internalUserId: brokerBUserId,
       organizationName: 'Acme Corp',
       forwardingValue: 250.5,
       localAgentName: 'Jane Agent',
@@ -1334,6 +1553,8 @@ describe('TransactionsService', () => {
       };
       const histRepoMock = { create: jest.fn(), save: jest.fn(), find: jest.fn() };
       const detailRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+      const assignRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+      const userRepoMock = { findOne: jest.fn() };
 
       dataSource.transaction.mockImplementation(async (fn: any) => {
         const manager = {
@@ -1341,6 +1562,8 @@ describe('TransactionsService', () => {
             if (entity === Transaction) return txRepoMock;
             if (entity === TransactionStatusHistory) return histRepoMock;
             if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            if (entity === User) return userRepoMock;
+            if (entity === TransactionBrokerBAssignment) return assignRepoMock;
             throw new Error('unexpected entity');
           },
         };
@@ -1370,6 +1593,8 @@ describe('TransactionsService', () => {
       };
       const histRepoMock = { create: jest.fn(), save: jest.fn(), find: jest.fn() };
       const detailRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+      const assignRepoMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+      const userRepoMock = { findOne: jest.fn() };
 
       dataSource.transaction.mockImplementation(async (fn: any) => {
         const manager = {
@@ -1377,6 +1602,8 @@ describe('TransactionsService', () => {
             if (entity === Transaction) return txRepoMock;
             if (entity === TransactionStatusHistory) return histRepoMock;
             if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            if (entity === User) return userRepoMock;
+            if (entity === TransactionBrokerBAssignment) return assignRepoMock;
             throw new Error('unexpected entity');
           },
         };
@@ -1439,6 +1666,18 @@ describe('TransactionsService', () => {
         create: jest.fn((v) => Object.assign(new BrokerALocalAgentDetail(), v)),
         save: jest.fn().mockImplementation((d) => Promise.resolve(d)),
       };
+      const assignRepoMock = {
+        findOne: jest.fn().mockResolvedValue(null),
+        create: jest.fn((v) => Object.assign(new TransactionBrokerBAssignment(), v)),
+        save: jest.fn().mockImplementation((a) => Promise.resolve(a)),
+      };
+      const userRepoMock = {
+        findOne: jest.fn().mockResolvedValue({
+          id: brokerBUserId,
+          role: UserRole.BROKER_B,
+          accountStatus: AccountStatus.ACTIVE,
+        } as User),
+      };
       const histRepoMock = {
         create: jest.fn((v) => Object.assign(new TransactionStatusHistory(), v)),
         save: jest.fn().mockImplementation((h) => Promise.resolve(h)),
@@ -1451,6 +1690,8 @@ describe('TransactionsService', () => {
             if (entity === Transaction) return txRepoMock;
             if (entity === TransactionStatusHistory) return histRepoMock;
             if (entity === BrokerALocalAgentDetail) return detailRepoMock;
+            if (entity === User) return userRepoMock;
+            if (entity === TransactionBrokerBAssignment) return assignRepoMock;
             throw new Error('unexpected entity');
           },
         };
@@ -1471,6 +1712,11 @@ describe('TransactionsService', () => {
       const savedDetail = detailRepoMock.save.mock.calls[0][0] as BrokerALocalAgentDetail;
       expect(savedDetail.forwardingValue).toBe('250.50');
       expect(savedDetail.submittedBy).toBe(brokerAuth.userId);
+      expect(assignRepoMock.save).toHaveBeenCalled();
+      const savedAssignment = assignRepoMock.save.mock
+        .calls[0][0] as TransactionBrokerBAssignment;
+      expect(savedAssignment.internalUserId).toBe(brokerBUserId);
+      expect(savedAssignment.assignmentStatus).toBe(BrokerBAssignmentStatus.ASSIGNED);
       expect(workflowHooks.onBrokerAReadyForBrokerB).toHaveBeenCalledWith(awaiting);
     });
   });

@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { BrokerBConfirmDeliveryDto } from '../transactions/dto/broker-b-confirm-delivery.dto';
+import { BrokerBDeclineDto } from '../transactions/dto/broker-b-decline.dto';
 import { TransactionsService } from '../transactions/transactions.service';
 
 /**
@@ -23,6 +24,23 @@ import { TransactionsService } from '../transactions/transactions.service';
 @Roles(UserRole.BROKER_B)
 export class BrokerBTransactionResponseController {
   constructor(private readonly transactions: TransactionsService) {}
+
+  @Post(':id/broker-b/accept')
+  accept(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.transactions.brokerBAccept(user, id);
+  }
+
+  @Post(':id/broker-b/decline')
+  decline(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() body: BrokerBDeclineDto,
+  ) {
+    return this.transactions.brokerBDecline(user, id, body);
+  }
 
   @Post(':id/broker-b/confirm-delivery')
   confirmDelivery(

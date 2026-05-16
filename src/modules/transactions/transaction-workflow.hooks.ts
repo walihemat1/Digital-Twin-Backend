@@ -27,6 +27,18 @@ export class TransactionWorkflowHooks {
     }
   }
 
+  async onBrokerBAccepted(_tx: Transaction): Promise<void> {
+    if (process.env.NODE_ENV !== 'test') {
+      this.logger.debug('onBrokerBAccepted (no-op hook)');
+    }
+  }
+
+  async onBrokerBDeclined(_tx: Transaction, _reason: string | null): Promise<void> {
+    if (process.env.NODE_ENV !== 'test') {
+      this.logger.debug('onBrokerBDeclined (no-op hook)');
+    }
+  }
+
   async onBrokerBDeliveryConfirmed(_tx: Transaction): Promise<void> {
     if (process.env.NODE_ENV !== 'test') {
       this.logger.debug('onBrokerBDeliveryConfirmed (no-op hook)');

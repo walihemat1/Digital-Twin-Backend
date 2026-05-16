@@ -17,11 +17,18 @@ import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.in
 import { User } from '../users/entities/user.entity';
 import { UserProfile } from '../users/entities/user-profile.entity';
 import { RecipientsRepository } from '../recipients/recipients.repository';
-import { assertTransactionAwaitingBrokerBDeliveryConfirmation } from './broker-b-delivery.rules';
+import {
+  assertBrokerBCanAcceptAssignment,
+  assertBrokerBCanDeclineAssignment,
+  assertTransactionAwaitingBrokerBDeliveryConfirmation,
+} from './broker-b-delivery.rules';
+import { NotificationDeliveryStatus } from '../../common/enums/notification-delivery-status.enum';
 import { assertMajorWorkflowFieldsUnlocked } from './transaction-workflow-lock.rules';
+import { generateSixDigitMfaCode } from '../auth/crypto/opaque-token.util';
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { BrokerBConfirmDeliveryDto } from './dto/broker-b-confirm-delivery.dto';
+import { BrokerBDeclineDto } from './dto/broker-b-decline.dto';
 import { CoordinatorChangeBrokerADto } from './dto/coordinator-change-broker-a.dto';
 import { CoordinatorChangeRecipientDto } from './dto/coordinator-change-recipient.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
@@ -69,9 +76,12 @@ export type TransactionSummaryView = {
   submitted_at: Date;
   created_at: Date;
   updated_at: Date;
-  /** Present when `recipient` relation was loaded (coordinator list). */
+  /** Present when `recipient` relation was loaded. */
   recipient_first_name?: string;
   recipient_last_name?: string;
+  /** Present when `coordinator` relation was loaded (Broker B list/detail). */
+  coordinator_first_name?: string;
+  coordinator_last_name?: string;
   /** Present on summaries built from a full `Transaction` row. */
   transfer_method?: string;
 };
@@ -87,6 +97,21 @@ export type CoordinatorAffirmationDetailView = {
   affirmed_at: Date;
 };
 
+/** Caller's Broker B assignment on detail reads (`transaction_broker_b_assignments`). */
+export type BrokerBAssignmentDetailView = {
+  id: string;
+  transaction_id: string;
+  assignment_type: BrokerBAssignmentType;
+  internal_user_id: string | null;
+  external_contact_id: string | null;
+  assignment_status: BrokerBAssignmentStatus;
+  assigned_at: Date;
+  responded_at: Date | null;
+  decline_reason: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
 export type TransactionDetailView = TransactionSummaryView & {
   transfer_method: string;
   verification_method: string;
@@ -97,6 +122,7 @@ export type TransactionDetailView = TransactionSummaryView & {
   status_history: TransactionStatusHistoryView[];
   recipient_feedback: RecipientFeedbackDetailView | null;
   coordinator_affirmation: CoordinatorAffirmationDetailView | null;
+  broker_b_assignment: BrokerBAssignmentDetailView | null;
 };
 
 /** Active Broker A account row for coordinator transaction creation (snake_case JSON). */
@@ -112,6 +138,24 @@ export type EligibleBrokerAPublicView = {
 
 export type PaginatedEligibleBrokerAView = {
   items: EligibleBrokerAPublicView[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+/** Active Broker B account row for Broker A forwarding selection (snake_case JSON). */
+export type EligibleBrokerBPublicView = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  location: string | null;
+  phone_number: string | null;
+  email: string;
+};
+
+export type PaginatedEligibleBrokerBView = {
+  items: EligibleBrokerBPublicView[];
   total: number;
   page: number;
   limit: number;
@@ -266,6 +310,85 @@ export class TransactionsService {
     };
   }
 
+  /**
+   * Paginated list of active Broker B users for Broker A local-agent / forwarding selection.
+   */
+  async listEligibleBrokerB(
+    authUser: AuthenticatedUser,
+    options?: { q?: string; limit?: number; page?: number },
+  ): Promise<PaginatedEligibleBrokerBView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerAReadAccess(actor);
+
+    const take = Math.min(Math.max(options?.limit ?? 10, 1), 50);
+    const page = Math.max(options?.page ?? 1, 1);
+    const offset = (page - 1) * take;
+
+    const qRaw = typeof options?.q === 'string' ? options.q.trim() : '';
+    const useFilter = qRaw.length >= 2;
+
+    let base = this.users
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.profile', 'p')
+      .where('u.role = :role', { role: UserRole.BROKER_B })
+      .andWhere('u.accountStatus = :act', { act: AccountStatus.ACTIVE });
+
+    if (useFilter) {
+      const pattern = `%${this.escapeIlikePattern(qRaw)}%`;
+      base = base.andWhere(
+        new Brackets((qb) => {
+          qb.where("u.firstName ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("u.lastName ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("u.email ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("p.phoneNumber ILIKE :pattern ESCAPE '\\'", { pattern })
+            .orWhere("p.contactPhoneE164 ILIKE :pattern ESCAPE '\\'", {
+              pattern,
+            });
+        }),
+      );
+    }
+
+    const total = await base.clone().getCount();
+    const rows = await base
+      .orderBy('u.lastName', 'ASC')
+      .addOrderBy('u.firstName', 'ASC')
+      .skip(offset)
+      .take(take)
+      .getMany();
+
+    const items: EligibleBrokerBPublicView[] = rows.map((u) => {
+      const p = u.profile;
+      const phone =
+        (typeof p?.contactPhoneE164 === 'string' && p.contactPhoneE164.trim() !== ''
+          ? p.contactPhoneE164.trim()
+          : null) ??
+        (typeof p?.phoneNumber === 'string' && p.phoneNumber.trim() !== ''
+          ? p.phoneNumber.trim()
+          : null);
+      return {
+        id: u.id,
+        first_name: u.firstName,
+        last_name: u.lastName,
+        location: this.formatBrokerLocation(p),
+        phone_number: phone,
+        email: u.email,
+      };
+    });
+
+    const totalPages = Math.max(1, Math.ceil(total / take));
+
+    return {
+      items,
+      total,
+      page,
+      limit: take,
+      totalPages,
+    };
+  }
+
   /** Explicit Broker A read gate: role + active account (mirrors coordinator funds checks). */
   private assertBrokerAReadAccess(actor: User): void {
     if (actor.role !== UserRole.BROKER_A) {
@@ -297,7 +420,32 @@ export class TransactionsService {
     );
   }
 
+  private isBrokerBDeclineReasonRequired(): boolean {
+    return this.config.get<boolean>(
+      'transactionWorkflow.brokerBDeclineReasonRequired',
+      false,
+    );
+  }
+
+  private get bcryptSaltRounds(): number {
+    return this.config.get<number>('auth.bcryptSaltRounds', 12);
+  }
+
+  private brokerBDeliveryAuthCodeTtlMs(): number {
+    const minutes = this.config.get<number>(
+      'transactionWorkflow.brokerBDeliveryAuthCodeTtlMinutes',
+      60 * 24,
+    );
+    const safe = Number.isFinite(minutes) && minutes > 0 ? minutes : 60 * 24;
+    return safe * 60 * 1000;
+  }
+
   private normalizeDeclineReason(dto?: BrokerADeclineDto): string | null {
+    const raw = dto?.reason?.trim();
+    return raw && raw.length > 0 ? raw : null;
+  }
+
+  private normalizeBrokerBDeclineReason(dto?: BrokerBDeclineDto): string | null {
     const raw = dto?.reason?.trim();
     return raw && raw.length > 0 ? raw : null;
   }
@@ -317,6 +465,7 @@ export class TransactionsService {
 
   private toSummary(tx: Transaction): TransactionSummaryView {
     const recipient = tx.recipient;
+    const coordinator = tx.coordinator;
     return {
       id: tx.id,
       coordinator_id: tx.coordinatorId,
@@ -335,6 +484,30 @@ export class TransactionsService {
             recipient_last_name: recipient.lastName,
           }
         : {}),
+      ...(coordinator != null
+        ? {
+            coordinator_first_name: coordinator.firstName,
+            coordinator_last_name: coordinator.lastName,
+          }
+        : {}),
+    };
+  }
+
+  private toBrokerBAssignmentDetailView(
+    row: TransactionBrokerBAssignment,
+  ): BrokerBAssignmentDetailView {
+    return {
+      id: row.id,
+      transaction_id: row.transactionId,
+      assignment_type: row.assignmentType,
+      internal_user_id: row.internalUserId,
+      external_contact_id: row.externalContactId,
+      assignment_status: row.assignmentStatus,
+      assigned_at: row.assignedAt,
+      responded_at: row.respondedAt,
+      decline_reason: row.declineReason,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
     };
   }
 
@@ -342,12 +515,14 @@ export class TransactionsService {
     tx: Transaction,
     history: TransactionStatusHistory[],
     extras?: {
-      recipientFeedback: RecipientFeedback | null;
-      coordinatorAffirmation: CoordinatorAffirmation | null;
+      recipientFeedback?: RecipientFeedback | null;
+      coordinatorAffirmation?: CoordinatorAffirmation | null;
+      brokerBAssignment?: TransactionBrokerBAssignment | null;
     },
   ): TransactionDetailView {
     const rf = extras?.recipientFeedback;
     const ca = extras?.coordinatorAffirmation;
+    const bba = extras?.brokerBAssignment;
     return {
       ...this.toSummary(tx),
       transfer_method: tx.transferMethod,
@@ -370,6 +545,7 @@ export class TransactionsService {
             affirmed_at: ca.affirmedAt,
           }
         : null,
+      broker_b_assignment: bba ? this.toBrokerBAssignmentDetailView(bba) : null,
     };
   }
 
@@ -551,6 +727,7 @@ export class TransactionsService {
 
     const rows = await this.transactions.find({
       where: { brokerAUserId: authUser.userId },
+      relations: ['recipient', 'coordinator'],
       order: { submittedAt: 'DESC' },
       skip,
       take,
@@ -569,7 +746,10 @@ export class TransactionsService {
     }
     this.assertBrokerAReadAccess(actor);
 
-    const tx = await this.transactions.findOne({ where: { id } });
+    const tx = await this.transactions.findOne({
+      where: { id },
+      relations: ['recipient', 'coordinator'],
+    });
     if (!tx || tx.brokerAUserId !== authUser.userId) {
       throw new NotFoundException('Transaction not found.');
     }
@@ -606,13 +786,15 @@ export class TransactionsService {
           bbAssignmentType: BrokerBAssignmentType.INTERNAL_USER,
         },
       )
+      .leftJoinAndSelect('tx.recipient', 'recipient')
+      .leftJoinAndSelect('tx.coordinator', 'coordinator')
       .where('bba.assignment_status IN (:...bbAssignmentStatuses)', {
         bbAssignmentStatuses: BROKER_B_OPEN_ASSIGNMENT_STATUSES,
       })
       .andWhere('tx.status IN (:...bbTxStatuses)', {
         bbTxStatuses: BROKER_B_VISIBLE_TRANSACTION_STATUSES,
       })
-      .orderBy('tx.submitted_at', 'DESC')
+      .orderBy('tx.submittedAt', 'DESC')
       .skip(skip)
       .take(take)
       .getMany();
@@ -630,7 +812,10 @@ export class TransactionsService {
     }
     this.assertBrokerBReadAccess(actor);
 
-    const tx = await this.transactions.findOne({ where: { id } });
+    const tx = await this.transactions.findOne({
+      where: { id },
+      relations: ['recipient', 'coordinator'],
+    });
     if (!tx) {
       throw new NotFoundException('Transaction not found.');
     }
@@ -656,7 +841,7 @@ export class TransactionsService {
       order: { createdAt: 'ASC' },
     });
 
-    return this.toDetail(tx, history);
+    return this.toDetail(tx, history, { brokerBAssignment: assignment });
   }
 
   async brokerAAccept(
@@ -791,6 +976,8 @@ export class TransactionsService {
       const txRepo = manager.getRepository(Transaction);
       const histRepo = manager.getRepository(TransactionStatusHistory);
       const detailRepo = manager.getRepository(BrokerALocalAgentDetail);
+      const userRepo = manager.getRepository(User);
+      const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
 
       const row = await txRepo.findOne({
         where: { id: transactionId, brokerAUserId: authUser.userId },
@@ -815,6 +1002,31 @@ export class TransactionsService {
         );
       }
 
+      const brokerB = await userRepo.findOne({
+        where: { id: dto.internalUserId },
+      });
+      if (!brokerB) {
+        throw new BadRequestException('Broker B user not found.');
+      }
+      if (brokerB.role !== UserRole.BROKER_B) {
+        throw new BadRequestException('Selected user is not an eligible Broker B.');
+      }
+      if (brokerB.accountStatus !== AccountStatus.ACTIVE) {
+        throw new BadRequestException('Broker B account is not active.');
+      }
+
+      const existingAssignment = await assignRepo.findOne({
+        where: {
+          transactionId: row.id,
+          assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        },
+      });
+      if (existingAssignment) {
+        throw new BadRequestException(
+          'This transaction already has an active Broker B assignment.',
+        );
+      }
+
       const submittedAt = new Date();
       const detailRow = detailRepo.create({
         transactionId: row.id,
@@ -827,6 +1039,18 @@ export class TransactionsService {
         submittedAt,
       });
       await detailRepo.save(detailRow);
+
+      const assignmentRow = assignRepo.create({
+        transactionId: row.id,
+        assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+        internalUserId: brokerB.id,
+        externalContactId: null,
+        assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        assignedAt: submittedAt,
+        respondedAt: null,
+        declineReason: null,
+      });
+      await assignRepo.save(assignmentRow);
 
       row.status = TransactionStatus.AWAITING_BROKER_B;
       const saved = await txRepo.save(row);
@@ -850,6 +1074,188 @@ export class TransactionsService {
     });
 
     await this.workflowHooks.onBrokerAReadyForBrokerB(savedForHook);
+    return detail;
+  }
+
+  async brokerBAccept(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerBReadAccess(actor);
+
+    let savedForHook!: Transaction;
+
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+      const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
+      const codeRepo = manager.getRepository(TransactionAuthCode);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      assertMajorWorkflowFieldsUnlocked(row);
+
+      const assignment = await assignRepo.findOne({
+        where: {
+          transactionId: row.id,
+          internalUserId: authUser.userId,
+          assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+          assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!assignment) {
+        throw new NotFoundException('Transaction not found.');
+      }
+
+      assertBrokerBCanAcceptAssignment(row, assignment);
+
+      const respondedAt = new Date();
+      assignment.assignmentStatus = BrokerBAssignmentStatus.ACCEPTED;
+      assignment.respondedAt = respondedAt;
+      await assignRepo.save(assignment);
+
+      await codeRepo.update(
+        {
+          transactionId: row.id,
+          brokerBAssignmentId: assignment.id,
+          invalidatedAt: IsNull(),
+        },
+        { invalidatedAt: respondedAt },
+      );
+
+      const plainCode = generateSixDigitMfaCode();
+      const codeHash = await bcrypt.hash(plainCode, this.bcryptSaltRounds);
+      const issuedAt = respondedAt;
+      const expiresAt = new Date(issuedAt.getTime() + this.brokerBDeliveryAuthCodeTtlMs());
+
+      await codeRepo.save(
+        codeRepo.create({
+          transactionId: row.id,
+          recipientId: row.recipientId,
+          brokerBAssignmentId: assignment.id,
+          codeHash,
+          issuedAt,
+          expiresAt,
+          invalidatedAt: null,
+          verifiedAt: null,
+          deliveryStatus: NotificationDeliveryStatus.PENDING,
+        }),
+      );
+
+      row.status = TransactionStatus.BROKER_B_ACCEPTED;
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.AWAITING_BROKER_B,
+        toStatus: TransactionStatus.BROKER_B_ACCEPTED,
+        changedByUserId: authUser.userId,
+        changeReason: null,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory, {
+        brokerBAssignment: assignment,
+      });
+    });
+
+    await this.workflowHooks.onBrokerBAccepted(savedForHook);
+    return detail;
+  }
+
+  async brokerBDecline(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+    dto?: BrokerBDeclineDto,
+  ): Promise<TransactionDetailView> {
+    const actor = await this.users.findOne({ where: { id: authUser.userId } });
+    if (!actor) {
+      throw new ForbiddenException('User not found.');
+    }
+    this.assertBrokerBReadAccess(actor);
+
+    const reason = this.normalizeBrokerBDeclineReason(dto);
+    if (this.isBrokerBDeclineReasonRequired() && !reason) {
+      throw new BadRequestException('Decline reason is required.');
+    }
+
+    let savedForHook!: Transaction;
+
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const txRepo = manager.getRepository(Transaction);
+      const histRepo = manager.getRepository(TransactionStatusHistory);
+      const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
+
+      const row = await txRepo.findOne({
+        where: { id: transactionId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!row) {
+        throw new NotFoundException('Transaction not found.');
+      }
+      assertMajorWorkflowFieldsUnlocked(row);
+
+      const assignment = await assignRepo.findOne({
+        where: {
+          transactionId: row.id,
+          internalUserId: authUser.userId,
+          assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+          assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!assignment) {
+        throw new NotFoundException('Transaction not found.');
+      }
+
+      assertBrokerBCanDeclineAssignment(row, assignment);
+
+      const respondedAt = new Date();
+      assignment.assignmentStatus = BrokerBAssignmentStatus.DECLINED;
+      assignment.respondedAt = respondedAt;
+      assignment.declineReason = reason;
+      await assignRepo.save(assignment);
+
+      row.status = TransactionStatus.BROKER_B_DECLINED;
+      const saved = await txRepo.save(row);
+      savedForHook = saved;
+
+      const hist = histRepo.create({
+        transactionId: saved.id,
+        fromStatus: TransactionStatus.AWAITING_BROKER_B,
+        toStatus: TransactionStatus.BROKER_B_DECLINED,
+        changedByUserId: authUser.userId,
+        changeReason: reason,
+        metadata: null,
+      });
+      await histRepo.save(hist);
+
+      const allHistory = await histRepo.find({
+        where: { transactionId: saved.id },
+        order: { createdAt: 'ASC' },
+      });
+      return this.toDetail(saved, allHistory, {
+        brokerBAssignment: assignment,
+      });
+    });
+
+    await this.workflowHooks.onBrokerBDeclined(savedForHook, reason);
     return detail;
   }
 

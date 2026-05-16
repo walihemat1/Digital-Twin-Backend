@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
   MinLength,
@@ -13,6 +14,9 @@ function trimString({ value }: TransformFnParams): unknown {
 }
 
 export class BrokerALocalAgentDetailsDto {
+  @IsUUID('4')
+  internalUserId!: string;
+
   @Transform(trimString)
   @IsString()
   @IsNotEmpty()
