@@ -230,7 +230,7 @@ describe('BrokerBAssignmentService', () => {
     expect(assignRepo.save).toHaveBeenCalled();
   });
 
-  it('assign persists external contact assignment', async () => {
+  it('assign rejects external contact assignment in V1', async () => {
     const contactId = '660e8400-e29b-41d4-a716-446655440001';
 
     usersRepo.findOne.mockResolvedValue({
@@ -241,18 +241,13 @@ describe('BrokerBAssignmentService', () => {
 
     txRepo.findOne.mockResolvedValue(awaitingTx());
     assignRepo.findOne.mockResolvedValue(null);
-    extRepo.findOne.mockResolvedValue(
-      Object.assign(new ExternalContact(), { id: contactId }),
-    );
 
-    const out = await service.assign(coordinatorAuth, 't1', {
-      assignmentType: BrokerBAssignmentType.EXTERNAL_CONTACT,
-      externalContactId: contactId,
-    });
-
-    expect(out.assignment_type).toBe(BrokerBAssignmentType.EXTERNAL_CONTACT);
-    expect(out.external_contact_id).toBe(contactId);
-    expect(out.internal_user_id).toBeNull();
-    expect(assignRepo.save).toHaveBeenCalled();
+    await expect(
+      service.assign(coordinatorAuth, 't1', {
+        assignmentType: BrokerBAssignmentType.EXTERNAL_CONTACT,
+        externalContactId: contactId,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(assignRepo.save).not.toHaveBeenCalled();
   });
 });

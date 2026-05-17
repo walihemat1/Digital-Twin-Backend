@@ -76,6 +76,30 @@ export class SendgridEmailService {
     });
   }
 
+  async sendCoordinatorWorkflowUpdate(
+    toEmail: string,
+    firstName: string,
+    message: string,
+  ): Promise<void> {
+    const from = this.auth.emailFrom;
+    if (!this.isConfigured || from.length === 0) {
+      this.log.warn(
+        `Coordinator workflow email skipped: SendGrid/EMAIL_FROM not configured (to=${this.redact(
+          toEmail,
+        )}).`,
+      );
+      return;
+    }
+    const subject = 'Transaction update';
+    await sendgrid.send({
+      to: toEmail,
+      from,
+      subject,
+      text: `Hi ${firstName},\n\n${message}`,
+      html: `<p>Hi ${this.escapeHtml(firstName)},</p><p>${this.escapeHtml(message)}</p>`,
+    });
+  }
+
   async sendPasswordReset(
     toEmail: string,
     firstName: string,

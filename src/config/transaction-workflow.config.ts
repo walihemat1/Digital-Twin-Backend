@@ -13,4 +13,10 @@ export default registerAs('transactionWorkflow', () => ({
   brokerBDeliveryAuthCodeTtlMinutes: Number(
     process.env.BROKER_B_AUTH_CODE_TTL_MINUTES ?? 60 * 24,
   ),
+  brokerBDeliveryVerificationMaxAttempts: Number(
+    process.env.BROKER_B_DELIVERY_VERIFICATION_MAX_ATTEMPTS ?? 5,
+  ),
+  brokerBDeliveryVerificationWindowMinutes: Number(
+    process.env.BROKER_B_DELIVERY_VERIFICATION_WINDOW_MINUTES ?? 60,
+  ),
 }));

@@ -61,6 +61,12 @@ import { TwilioVerifyService } from './registration/twilio-verify.service';
     AuthTokensService,
     PasswordRecoveryService,
   ],
-  exports: [PassportModule, JwtModule, AuthTokensService, SendgridEmailService],
+  exports: [
+    PassportModule,
+    JwtModule,
+    AuthTokensService,
+    SendgridEmailService,
+    TwilioVerifyService,
+  ],
 })
 export class AuthModule {}

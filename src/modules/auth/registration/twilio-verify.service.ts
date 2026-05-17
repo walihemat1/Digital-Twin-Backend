@@ -38,6 +38,39 @@ export class TwilioVerifyService {
     return this.twilioClient !== null;
   }
 
+  /**
+   * Sends a delivery auth code via Verify with a fixed customCode (same value
+   * shown to Broker B and verified via bcrypt on confirm-delivery).
+   */
+  async sendDeliveryAuthCodeSms(
+    phoneNumberE164: string,
+    customCode: string,
+  ): Promise<boolean> {
+    if (!this.twilioClient) {
+      this.log.warn(
+        'Delivery auth SMS skipped (Twilio Verify not configured).',
+      );
+      return false;
+    }
+    try {
+      await this.twilioClient.verify.v2
+        .services(this.auth.twilioVerifyServiceSid)
+        .verifications.create({
+          to: phoneNumberE164,
+          channel: 'sms',
+          customCode,
+        });
+      return true;
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: unknown }).message)
+          : 'Twilio Verify request failed.';
+      this.log.warn(`Twilio Verify delivery auth SMS failed: ${msg}`);
+      return false;
+    }
+  }
+
   async sendSmsVerification(phoneNumberE164: string): Promise<void> {
     if (!this.twilioClient) {
       throw new BadRequestException(

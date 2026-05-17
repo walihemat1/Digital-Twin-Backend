@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -26,6 +28,7 @@ import { NotificationDeliveryStatus } from '../../common/enums/notification-deli
 import { assertMajorWorkflowFieldsUnlocked } from './transaction-workflow-lock.rules';
 import { generateSixDigitMfaCode } from '../auth/crypto/opaque-token.util';
 import { BrokerADeclineDto } from './dto/broker-a-decline.dto';
+import { BrokerAAssignBrokerBDto } from './dto/broker-a-assign-broker-b.dto';
 import { BrokerALocalAgentDetailsDto } from './dto/broker-a-local-agent-details.dto';
 import { BrokerBConfirmDeliveryDto } from './dto/broker-b-confirm-delivery.dto';
 import { BrokerBDeclineDto } from './dto/broker-b-decline.dto';
@@ -33,7 +36,11 @@ import { CoordinatorChangeBrokerADto } from './dto/coordinator-change-broker-a.d
 import { CoordinatorChangeRecipientDto } from './dto/coordinator-change-recipient.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { RecipientFeedback } from '../recipient-feedback/entities/recipient-feedback.entity';
+import { Recipient } from '../recipients/entities/recipient.entity';
 import { BrokerALocalAgentDetail } from './entities/broker-a-local-agent-detail.entity';
+import { TransactionDeliveryVerificationAttempt } from './entities/transaction-delivery-verification-attempt.entity';
+import { DeliveryAuthCodeCryptoService } from './delivery-auth-code-crypto.service';
+import { TransactionWorkflowNotificationService } from './transaction-workflow-notification.service';
 import { CoordinatorAffirmation } from './entities/coordinator-affirmation.entity';
 import { TransactionAuthCode } from './entities/transaction-auth-code.entity';
 import { TransactionBrokerBAssignment } from './entities/transaction-broker-b-assignment.entity';
@@ -123,6 +130,8 @@ export type TransactionDetailView = TransactionSummaryView & {
   recipient_feedback: RecipientFeedbackDetailView | null;
   coordinator_affirmation: CoordinatorAffirmationDetailView | null;
   broker_b_assignment: BrokerBAssignmentDetailView | null;
+  /** Present for assigned Broker B while an active unverified auth code exists. */
+  delivery_auth_code?: string | null;
 };
 
 /** Active Broker A account row for coordinator transaction creation (snake_case JSON). */
@@ -178,9 +187,15 @@ export class TransactionsService {
     private readonly coordinatorAffirmations: Repository<CoordinatorAffirmation>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
+    @InjectRepository(TransactionAuthCode)
+    private readonly authCodes: Repository<TransactionAuthCode>,
+    @InjectRepository(Recipient)
+    private readonly recipientEntities: Repository<Recipient>,
     private readonly recipients: RecipientsRepository,
     private readonly config: ConfigService,
     private readonly workflowHooks: TransactionWorkflowHooks,
+    private readonly deliveryAuthCodeCrypto: DeliveryAuthCodeCryptoService,
+    private readonly workflowNotifications: TransactionWorkflowNotificationService,
   ) {}
 
   private assertFundsAccess(actor: User): void {
@@ -440,6 +455,109 @@ export class TransactionsService {
     return safe * 60 * 1000;
   }
 
+  private brokerBDeliveryVerificationMaxAttempts(): number {
+    const n = this.config.get<number>(
+      'transactionWorkflow.brokerBDeliveryVerificationMaxAttempts',
+      5,
+    );
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
+  }
+
+  private brokerBDeliveryVerificationWindowMs(): number {
+    const minutes = this.config.get<number>(
+      'transactionWorkflow.brokerBDeliveryVerificationWindowMinutes',
+      60,
+    );
+    const safe = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
+    return safe * 60 * 1000;
+  }
+
+  private amountsMatch(expected: string, received: number): boolean {
+    const expectedNum = Number.parseFloat(expected);
+    const receivedNum = Number(received);
+    if (!Number.isFinite(expectedNum) || !Number.isFinite(receivedNum)) {
+      return false;
+    }
+    return expectedNum.toFixed(2) === receivedNum.toFixed(2);
+  }
+
+  private async resolveDeliveryAuthCodeForBrokerB(
+    transactionId: string,
+    brokerBAssignmentId: string,
+  ): Promise<string | null> {
+    const activeCode = await this.authCodes.findOne({
+      where: {
+        transactionId,
+        brokerBAssignmentId,
+        invalidatedAt: IsNull(),
+        verifiedAt: IsNull(),
+      },
+      order: { issuedAt: 'DESC' },
+    });
+    if (
+      !activeCode?.codeEncrypted ||
+      activeCode.expiresAt.getTime() <= Date.now()
+    ) {
+      return null;
+    }
+    try {
+      return this.deliveryAuthCodeCrypto.decrypt(activeCode.codeEncrypted);
+    } catch {
+      return null;
+    }
+  }
+
+  private async assertDeliveryVerificationNotRateLimited(
+    transactionId: string,
+    brokerBUserId: string,
+    manager: import('typeorm').EntityManager,
+  ): Promise<void> {
+    const attemptRepo = manager.getRepository(
+      TransactionDeliveryVerificationAttempt,
+    );
+    const windowStart = new Date(
+      Date.now() - this.brokerBDeliveryVerificationWindowMs(),
+    );
+    const count = await attemptRepo
+      .createQueryBuilder('a')
+      .where('a.transaction_id = :transactionId', { transactionId })
+      .andWhere('a.broker_b_user_id = :brokerBUserId', { brokerBUserId })
+      .andWhere('a.created_at >= :windowStart', { windowStart })
+      .getCount();
+
+    if (count >= this.brokerBDeliveryVerificationMaxAttempts()) {
+      throw new HttpException(
+        {
+          code: 'rate_limited',
+          message: 'Too many delivery verification attempts. Try again later.',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  private async recordDeliveryVerificationFailure(
+    manager: import('typeorm').EntityManager,
+    transactionId: string,
+    brokerBUserId: string,
+    failureReason: string,
+    codeValid: boolean | null,
+    amountValid: boolean | null,
+  ): Promise<void> {
+    const attemptRepo = manager.getRepository(
+      TransactionDeliveryVerificationAttempt,
+    );
+    await attemptRepo.save(
+      attemptRepo.create({
+        transactionId,
+        brokerBUserId,
+        failureReason,
+        codeValid,
+        amountValid,
+      }),
+    );
+  }
+
   private normalizeDeclineReason(dto?: BrokerADeclineDto): string | null {
     const raw = dto?.reason?.trim();
     return raw && raw.length > 0 ? raw : null;
@@ -518,6 +636,7 @@ export class TransactionsService {
       recipientFeedback?: RecipientFeedback | null;
       coordinatorAffirmation?: CoordinatorAffirmation | null;
       brokerBAssignment?: TransactionBrokerBAssignment | null;
+      deliveryAuthCode?: string | null;
     },
   ): TransactionDetailView {
     const rf = extras?.recipientFeedback;
@@ -546,6 +665,9 @@ export class TransactionsService {
           }
         : null,
       broker_b_assignment: bba ? this.toBrokerBAssignmentDetailView(bba) : null,
+      ...(extras?.deliveryAuthCode !== undefined
+        ? { delivery_auth_code: extras.deliveryAuthCode }
+        : {}),
     };
   }
 
@@ -841,7 +963,15 @@ export class TransactionsService {
       order: { createdAt: 'ASC' },
     });
 
-    return this.toDetail(tx, history, { brokerBAssignment: assignment });
+    const deliveryAuthCode = await this.resolveDeliveryAuthCodeForBrokerB(
+      tx.id,
+      assignment.id,
+    );
+
+    return this.toDetail(tx, history, {
+      brokerBAssignment: assignment,
+      deliveryAuthCode,
+    });
   }
 
   async brokerAAccept(
@@ -958,10 +1088,23 @@ export class TransactionsService {
     return detail;
   }
 
+  /**
+   * @deprecated Use `brokerAAssignBrokerB`. Kept as a thin alias for older clients.
+   */
   async brokerASubmitLocalAgentDetails(
     authUser: AuthenticatedUser,
     transactionId: string,
     dto: BrokerALocalAgentDetailsDto,
+  ): Promise<TransactionDetailView> {
+    return this.brokerAAssignBrokerB(authUser, transactionId, {
+      internalUserId: dto.internalUserId,
+    });
+  }
+
+  async brokerAAssignBrokerB(
+    authUser: AuthenticatedUser,
+    transactionId: string,
+    dto: BrokerAAssignBrokerBDto,
   ): Promise<TransactionDetailView> {
     const actor = await this.users.findOne({ where: { id: authUser.userId } });
     if (!actor) {
@@ -969,13 +1112,11 @@ export class TransactionsService {
     }
     this.assertBrokerAReadAccess(actor);
 
-    const forwardingStr = dto.forwardingValue.toFixed(2);
     let savedForHook!: Transaction;
 
     const detail = await this.dataSource.transaction(async (manager) => {
       const txRepo = manager.getRepository(Transaction);
       const histRepo = manager.getRepository(TransactionStatusHistory);
-      const detailRepo = manager.getRepository(BrokerALocalAgentDetail);
       const userRepo = manager.getRepository(User);
       const assignRepo = manager.getRepository(TransactionBrokerBAssignment);
 
@@ -989,16 +1130,19 @@ export class TransactionsService {
       assertMajorWorkflowFieldsUnlocked(row);
       if (row.status !== TransactionStatus.BROKER_A_ACCEPTED) {
         throw new BadRequestException(
-          'Local agent details can only be submitted after acceptance and while the transaction is awaiting your forwarding details.',
+          'Broker B can only be assigned after acceptance and while the transaction is awaiting assignment.',
         );
       }
 
-      const existing = await detailRepo.findOne({
-        where: { transactionId: row.id },
+      const existingAssignment = await assignRepo.findOne({
+        where: {
+          transactionId: row.id,
+          assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
+        },
       });
-      if (existing) {
+      if (existingAssignment) {
         throw new BadRequestException(
-          'Local agent details have already been submitted for this transaction.',
+          'This transaction already has an active Broker B assignment.',
         );
       }
 
@@ -1015,38 +1159,14 @@ export class TransactionsService {
         throw new BadRequestException('Broker B account is not active.');
       }
 
-      const existingAssignment = await assignRepo.findOne({
-        where: {
-          transactionId: row.id,
-          assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
-        },
-      });
-      if (existingAssignment) {
-        throw new BadRequestException(
-          'This transaction already has an active Broker B assignment.',
-        );
-      }
-
-      const submittedAt = new Date();
-      const detailRow = detailRepo.create({
-        transactionId: row.id,
-        organizationName: dto.organizationName,
-        forwardingValue: forwardingStr,
-        localAgentName: dto.localAgentName,
-        localAgentPhone: dto.localAgentPhone,
-        coordinationMethod: dto.coordinationMethod,
-        submittedBy: authUser.userId,
-        submittedAt,
-      });
-      await detailRepo.save(detailRow);
-
+      const assignedAt = new Date();
       const assignmentRow = assignRepo.create({
         transactionId: row.id,
         assignmentType: BrokerBAssignmentType.INTERNAL_USER,
         internalUserId: brokerB.id,
         externalContactId: null,
         assignmentStatus: BrokerBAssignmentStatus.ASSIGNED,
-        assignedAt: submittedAt,
+        assignedAt,
         respondedAt: null,
         declineReason: null,
       });
@@ -1070,7 +1190,9 @@ export class TransactionsService {
         where: { transactionId: saved.id },
         order: { createdAt: 'ASC' },
       });
-      return this.toDetail(saved, allHistory);
+      return this.toDetail(saved, allHistory, {
+        brokerBAssignment: assignmentRow,
+      });
     });
 
     await this.workflowHooks.onBrokerAReadyForBrokerB(savedForHook);
@@ -1088,6 +1210,8 @@ export class TransactionsService {
     this.assertBrokerBReadAccess(actor);
 
     let savedForHook!: Transaction;
+    let plainCodeForNotifications = '';
+    let authCodeIdForSms = '';
 
     const detail = await this.dataSource.transaction(async (manager) => {
       const txRepo = manager.getRepository(Transaction);
@@ -1134,16 +1258,19 @@ export class TransactionsService {
       );
 
       const plainCode = generateSixDigitMfaCode();
+      plainCodeForNotifications = plainCode;
       const codeHash = await bcrypt.hash(plainCode, this.bcryptSaltRounds);
+      const codeEncrypted = this.deliveryAuthCodeCrypto.encrypt(plainCode);
       const issuedAt = respondedAt;
       const expiresAt = new Date(issuedAt.getTime() + this.brokerBDeliveryAuthCodeTtlMs());
 
-      await codeRepo.save(
+      const savedCode = await codeRepo.save(
         codeRepo.create({
           transactionId: row.id,
           recipientId: row.recipientId,
           brokerBAssignmentId: assignment.id,
           codeHash,
+          codeEncrypted,
           issuedAt,
           expiresAt,
           invalidatedAt: null,
@@ -1151,6 +1278,7 @@ export class TransactionsService {
           deliveryStatus: NotificationDeliveryStatus.PENDING,
         }),
       );
+      authCodeIdForSms = savedCode.id;
 
       row.status = TransactionStatus.BROKER_B_ACCEPTED;
       const saved = await txRepo.save(row);
@@ -1172,10 +1300,25 @@ export class TransactionsService {
       });
       return this.toDetail(saved, allHistory, {
         brokerBAssignment: assignment,
+        deliveryAuthCode: plainCode,
       });
     });
 
-    await this.workflowHooks.onBrokerBAccepted(savedForHook);
+    const recipient = await this.recipientEntities.findOne({
+      where: { id: savedForHook.recipientId },
+    });
+    if (recipient && plainCodeForNotifications) {
+      await this.workflowNotifications.sendRecipientDeliveryAuthSms(
+        savedForHook,
+        recipient,
+        plainCodeForNotifications,
+        authCodeIdForSms,
+      );
+    }
+    await this.workflowHooks.onBrokerBAccepted(
+      savedForHook,
+      plainCodeForNotifications,
+    );
     return detail;
   }
 
@@ -1272,7 +1415,10 @@ export class TransactionsService {
 
     const plainCode = dto.code.trim();
     if (!plainCode) {
-      throw new BadRequestException('Invalid or expired delivery code.');
+      throw new BadRequestException({
+        code: 'invalid_code',
+        message: 'Invalid or expired delivery code.',
+      });
     }
 
     let savedForHook!: Transaction;
@@ -1304,6 +1450,12 @@ export class TransactionsService {
 
       assertTransactionAwaitingBrokerBDeliveryConfirmation(row);
 
+      await this.assertDeliveryVerificationNotRateLimited(
+        row.id,
+        authUser.userId,
+        manager,
+      );
+
       const codeRepo = manager.getRepository(TransactionAuthCode);
       const activeCode = await codeRepo.findOne({
         where: {
@@ -1317,19 +1469,71 @@ export class TransactionsService {
       });
 
       if (!activeCode || activeCode.recipientId !== row.recipientId) {
-        throw new BadRequestException('Invalid or expired delivery code.');
+        await this.recordDeliveryVerificationFailure(
+          manager,
+          row.id,
+          authUser.userId,
+          'invalid_code',
+          false,
+          null,
+        );
+        throw new BadRequestException({
+          code: 'invalid_code',
+          message: 'Invalid or expired delivery code.',
+        });
       }
 
       if (activeCode.expiresAt.getTime() <= Date.now()) {
-        throw new BadRequestException('Invalid or expired delivery code.');
+        await this.recordDeliveryVerificationFailure(
+          manager,
+          row.id,
+          authUser.userId,
+          'expired_code',
+          false,
+          null,
+        );
+        throw new BadRequestException({
+          code: 'invalid_code',
+          message: 'Invalid or expired delivery code.',
+        });
       }
 
-      const match = await bcrypt.compare(plainCode, activeCode.codeHash);
-      if (!match) {
-        throw new BadRequestException('Invalid or expired delivery code.');
+      const codeMatch = await bcrypt.compare(plainCode, activeCode.codeHash);
+      const amountMatch = this.amountsMatch(row.amount, dto.amountReceived);
+
+      if (!codeMatch || !amountMatch) {
+        await this.recordDeliveryVerificationFailure(
+          manager,
+          row.id,
+          authUser.userId,
+          !codeMatch && !amountMatch
+            ? 'invalid_code_and_amount'
+            : !codeMatch
+              ? 'invalid_code'
+              : 'invalid_amount',
+          codeMatch,
+          amountMatch,
+        );
+        if (!codeMatch && !amountMatch) {
+          throw new BadRequestException({
+            code: 'invalid_code_and_amount',
+            message: 'Delivery verification failed: code and amount do not match.',
+          });
+        }
+        if (!codeMatch) {
+          throw new BadRequestException({
+            code: 'invalid_code',
+            message: 'The authentication code does not match.',
+          });
+        }
+        throw new BadRequestException({
+          code: 'invalid_amount',
+          message: 'The amount does not match the transaction.',
+        });
       }
 
       activeCode.verifiedAt = new Date();
+      activeCode.codeEncrypted = null;
       await codeRepo.save(activeCode);
 
       row.status = TransactionStatus.DELIVERED;
@@ -1344,7 +1548,7 @@ export class TransactionsService {
         toStatus: TransactionStatus.DELIVERED,
         changedByUserId: authUser.userId,
         changeReason: null,
-        metadata: null,
+        metadata: { verification: 'code_and_amount' },
       });
       await histRepo.save(hist);
 
@@ -1352,7 +1556,7 @@ export class TransactionsService {
         where: { transactionId: saved.id },
         order: { createdAt: 'ASC' },
       });
-      return this.toDetail(saved, allHistory);
+      return this.toDetail(saved, allHistory, { deliveryAuthCode: null });
     });
 
     await this.workflowHooks.onBrokerBDeliveryConfirmed(savedForHook);

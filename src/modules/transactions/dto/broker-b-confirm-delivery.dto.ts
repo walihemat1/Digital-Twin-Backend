@@ -1,4 +1,12 @@
-import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsNumber,
+  IsString,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class BrokerBConfirmDeliveryDto {
   @IsString()
@@ -6,4 +14,9 @@ export class BrokerBConfirmDeliveryDto {
   @MinLength(4)
   @MaxLength(64)
   code!: string;
+
+  @Type(() => Number)
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0.01)
+  amountReceived!: number;
 }

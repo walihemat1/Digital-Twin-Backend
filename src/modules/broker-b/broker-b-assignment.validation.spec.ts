@@ -36,31 +36,11 @@ describe('assertBrokerBAssignmentTargetsValid', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('accepts external_contact with externalContactId only', () => {
+  it('rejects external_contact in V1', () => {
     expect(() =>
       assertBrokerBAssignmentTargetsValid(
         BrokerBAssignmentType.EXTERNAL_CONTACT,
         undefined,
-        cid,
-      ),
-    ).not.toThrow();
-  });
-
-  it('rejects external_contact without externalContactId', () => {
-    expect(() =>
-      assertBrokerBAssignmentTargetsValid(
-        BrokerBAssignmentType.EXTERNAL_CONTACT,
-        undefined,
-        undefined,
-      ),
-    ).toThrow(BadRequestException);
-  });
-
-  it('rejects external_contact when internalUserId is also set', () => {
-    expect(() =>
-      assertBrokerBAssignmentTargetsValid(
-        BrokerBAssignmentType.EXTERNAL_CONTACT,
-        uid,
         cid,
       ),
     ).toThrow(BadRequestException);

@@ -33,6 +33,10 @@ export class TransactionAuthCode extends BaseEntity {
   @Column({ name: 'code_hash', type: 'varchar', length: 255 })
   codeHash!: string;
 
+  /** AES-GCM encrypted plain code for Broker B detail display until verified. */
+  @Column({ name: 'code_encrypted', type: 'text', nullable: true })
+  codeEncrypted!: string | null;
+
   @Column({ name: 'issued_at', type: 'timestamptz' })
   issuedAt!: Date;
 

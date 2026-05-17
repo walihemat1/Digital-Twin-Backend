@@ -26,12 +26,9 @@ export function assertBrokerBAssignmentTargetsValid(
   }
 
   if (assignmentType === BrokerBAssignmentType.EXTERNAL_CONTACT) {
-    if (!hasExternal || hasInternal) {
-      throw new BadRequestException(
-        'assignment_type external_contact requires externalContactId and must not include internalUserId.',
-      );
-    }
-    return;
+    throw new BadRequestException(
+      'External Broker B contacts are not supported in V1.',
+    );
   }
 
   throw new BadRequestException('Invalid assignment_type.');
