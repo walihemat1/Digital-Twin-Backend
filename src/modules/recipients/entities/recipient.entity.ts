@@ -31,6 +31,14 @@ export class Recipient extends BaseEntity {
   identificationNumberEncrypted!: string | null;
 
   @Column({
+    name: 'identification_number_hash',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  identificationNumberHash!: string | null;
+
+  @Column({
     name: 'verification_status',
     type: 'enum',
     enum: VerificationStatus,

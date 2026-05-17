@@ -17,8 +17,14 @@ describe('RecipientsService', () => {
     Pick<
       RecipientsRepository,
       | 'save'
-      | 'searchActiveByQueryPaged'
+      | 'remove'
+      | 'listByQueryPaged'
       | 'findActiveByNormalizedPhone'
+      | 'findByNormalizedEmail'
+      | 'findByIdentificationHash'
+      | 'findByIdForUser'
+      | 'countTransactionsForRecipient'
+      | 'listTransactionsForRecipient'
       | 'isRecipientVisibleToCoordinatorUser'
     >
   >;
@@ -26,6 +32,7 @@ describe('RecipientsService', () => {
     Pick<RecipientIdentityCryptoService, 'encrypt' | 'decrypt'>
   >;
   let usersRepo: { findOne: jest.Mock };
+  let audit: { append: jest.Mock; listForEntity: jest.Mock };
 
   const coordinatorAuth: AuthenticatedUser = {
     userId: 'coord-1',
@@ -51,15 +58,23 @@ describe('RecipientsService', () => {
   beforeEach(() => {
     repo = {
       save: jest.fn(),
-      searchActiveByQueryPaged: jest.fn(),
+      remove: jest.fn(),
+      listByQueryPaged: jest.fn(),
       findActiveByNormalizedPhone: jest.fn().mockResolvedValue(null),
+      findByNormalizedEmail: jest.fn().mockResolvedValue(null),
+      findByIdentificationHash: jest.fn().mockResolvedValue(null),
+      findByIdForUser: jest.fn(),
+      countTransactionsForRecipient: jest.fn().mockResolvedValue(0),
+      listTransactionsForRecipient: jest.fn().mockResolvedValue([]),
       isRecipientVisibleToCoordinatorUser: jest.fn().mockResolvedValue(false),
     };
     crypto = { encrypt: jest.fn(), decrypt: jest.fn() };
     usersRepo = { findOne: jest.fn() };
+    audit = { append: jest.fn(), listForEntity: jest.fn().mockResolvedValue([]) };
     service = new RecipientsService(
       repo as RecipientsRepository,
       crypto as unknown as RecipientIdentityCryptoService,
+      audit as any,
       usersRepo as any,
     );
   });
@@ -170,21 +185,30 @@ describe('RecipientsService', () => {
       cityTown: null,
       zipCode: null,
     });
-    repo.searchActiveByQueryPaged.mockResolvedValue({ items: [row], total: 1 });
+    repo.listByQueryPaged.mockResolvedValue({ items: [row], total: 1 });
 
     const out = await service.searchPaged('bo', { limit: 10, page: 1 }, coordinatorAuth);
 
-    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('bo', 10, 1, {
-      mode: 'user',
-      userId: 'coord-1',
-    });
+    expect(repo.listByQueryPaged).toHaveBeenCalledWith(
+      'bo',
+      10,
+      1,
+      { mode: 'user', userId: 'coord-1' },
+      'active',
+      { sortBy: 'updated_at', sortDir: 'DESC' },
+    );
     expect(out.items).toHaveLength(1);
 
-    repo.searchActiveByQueryPaged.mockResolvedValue({ items: [], total: 0 });
+    repo.listByQueryPaged.mockResolvedValue({ items: [], total: 0 });
     const emptyOut = await service.searchPaged('', { limit: 10, page: 1 }, adminAuth);
-    expect(repo.searchActiveByQueryPaged).toHaveBeenCalledWith('', 10, 1, {
-      mode: 'admin',
-    });
+    expect(repo.listByQueryPaged).toHaveBeenCalledWith(
+      '',
+      10,
+      1,
+      { mode: 'admin' },
+      'active',
+      { sortBy: 'updated_at', sortDir: 'DESC' },
+    );
     expect(emptyOut.items).toHaveLength(0);
     expect(emptyOut.total).toBe(0);
     expect(out.total).toBe(1);
@@ -193,5 +217,106 @@ describe('RecipientsService', () => {
     expect(out.totalPages).toBe(1);
     expect(out.items[0].first_name).toBe('Bo');
     expect(out.items[0].normalized_phone).toBe('+447700900123');
+  });
+
+  it('remove blocks delete when transactions exist', async () => {
+    const row = Object.assign(new Recipient(), {
+      id: 'r-del',
+      firstName: 'A',
+      lastName: 'B',
+      phoneNumber: '+15551234567',
+      normalizedPhone: '+15551234567',
+      isActive: true,
+      verificationStatus: VerificationStatus.UNVERIFIED,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    repo.findByIdForUser.mockResolvedValue(row);
+    repo.countTransactionsForRecipient.mockResolvedValue(2);
+
+    await expect(service.remove('r-del', coordinatorAuth)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({ actionType: 'recipient.delete_attempted' }),
+    );
+    expect(repo.remove).not.toHaveBeenCalled();
+  });
+
+  it('remove deletes when no transactions', async () => {
+    const row = Object.assign(new Recipient(), {
+      id: 'r-del',
+      firstName: 'A',
+      lastName: 'B',
+      phoneNumber: '+15551234567',
+      normalizedPhone: '+15551234567',
+      isActive: true,
+      verificationStatus: VerificationStatus.UNVERIFIED,
+      issuingCountry: null,
+      identificationNumberEncrypted: null,
+      organizationName: null,
+      email: null,
+      whatsappNumber: null,
+      countryCode: null,
+      stateProvinceCode: null,
+      addressLine1: null,
+      addressLine2: null,
+      cityTown: null,
+      zipCode: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    repo.findByIdForUser.mockResolvedValue(row);
+    repo.countTransactionsForRecipient.mockResolvedValue(0);
+
+    const out = await service.remove('r-del', coordinatorAuth);
+    expect(out.deleted).toBe(true);
+    expect(repo.remove).toHaveBeenCalledWith(row);
+    expect(audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({ actionType: 'recipient.deleted' }),
+    );
+  });
+
+  it('update skips phone duplicate check when number unchanged', async () => {
+    const row = Object.assign(new Recipient(), {
+      id: 'r-up',
+      firstName: 'Ann',
+      lastName: 'Lee',
+      phoneNumber: '+15551234567',
+      normalizedPhone: '+15551234567',
+      issuingCountry: null,
+      identificationNumberEncrypted: null,
+      identificationNumberHash: null,
+      verificationStatus: VerificationStatus.UNVERIFIED,
+      isActive: true,
+      email: null,
+      organizationName: null,
+      whatsappNumber: null,
+      countryCode: 'US',
+      stateProvinceCode: 'AZ',
+      addressLine1: '1 Main St',
+      addressLine2: null,
+      cityTown: 'Phoenix',
+      zipCode: '85001',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    repo.findByIdForUser.mockResolvedValue(row);
+    repo.save.mockImplementation(async (e) => e as Recipient);
+    repo.findActiveByNormalizedPhone.mockResolvedValue({
+      id: 'other-hidden',
+    } as Recipient);
+
+    await service.update(
+      'r-up',
+      {
+        firstName: 'Ann',
+        phoneCountryCode: '+1',
+        phoneNumber: '5551234567',
+      },
+      coordinatorAuth,
+    );
+
+    expect(repo.findActiveByNormalizedPhone).not.toHaveBeenCalled();
   });
 });

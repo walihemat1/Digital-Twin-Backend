@@ -57,6 +57,18 @@ export class AuditService {
   }
 
   /** Persists an audit row using the given transactional EntityManager. */
+  async listForEntity(
+    entityType: string,
+    entityId: string,
+    limit = 50,
+  ): Promise<AuditLog[]> {
+    return this.auditLogs.find({
+      where: { entityType, entityId },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+  }
+
   async appendWithManager(
     manager: EntityManager,
     input: AuditAppendInput,
