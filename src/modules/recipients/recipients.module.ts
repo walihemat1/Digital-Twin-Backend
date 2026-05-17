@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
+import { Transaction } from '../transactions/entities/transaction.entity';
 import { User } from '../users/entities/user.entity';
 import { RecipientUserAccess } from './entities/recipient-user-access.entity';
 import { Recipient } from './entities/recipient.entity';
@@ -12,7 +14,13 @@ import { RecipientsService } from './recipients.service';
 @Module({
   imports: [
     AuthModule,
-    TypeOrmModule.forFeature([Recipient, RecipientUserAccess, User]),
+    AuditModule,
+    TypeOrmModule.forFeature([
+      Recipient,
+      RecipientUserAccess,
+      User,
+      Transaction,
+    ]),
   ],
   controllers: [RecipientsController],
   providers: [
