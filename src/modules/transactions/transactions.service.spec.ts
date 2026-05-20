@@ -36,7 +36,7 @@ describe('TransactionsService', () => {
     Pick<Repository<User>, 'findOne' | 'createQueryBuilder'>
   >;
   let brokerBAssignmentsRepo: jest.Mocked<
-    Pick<Repository<TransactionBrokerBAssignment>, 'findOne'>
+    Pick<Repository<TransactionBrokerBAssignment>, 'findOne' | 'find'>
   >;
   let recipientFeedbackRepo: jest.Mocked<
     Pick<Repository<RecipientFeedback>, 'findOne'>
@@ -85,7 +85,7 @@ describe('TransactionsService', () => {
     };
     histRepo = { find: jest.fn(), save: jest.fn() };
     usersRepo = { findOne: jest.fn(), createQueryBuilder: jest.fn() };
-    brokerBAssignmentsRepo = { findOne: jest.fn() };
+    brokerBAssignmentsRepo = { findOne: jest.fn(), find: jest.fn() };
     recipientFeedbackRepo = { findOne: jest.fn() };
     coordinatorAffirmationsRepo = { findOne: jest.fn() };
     recipientsRepo = { findEligibleForTransactionForUser: jest.fn() };
@@ -361,6 +361,77 @@ describe('TransactionsService', () => {
       expect(out[0].transfer_method).toBe('IVTS Tracker');
       expect(out[0].recipient_first_name).toBe('Faisal');
       expect(out[0].recipient_last_name).toBe('Popalzai');
+    });
+  });
+
+  describe('Coordinator detail', () => {
+    it('getDetailForCoordinator includes Broker A and Broker B display names', async () => {
+      usersRepo.findOne.mockResolvedValue({
+        id: auth.userId,
+        role: UserRole.COORDINATOR_SENDER,
+        accountStatus: AccountStatus.ACTIVE,
+      } as User);
+
+      const tx = Object.assign(new Transaction(), {
+        id: '11111111-1111-4111-8111-111111111111',
+        coordinatorId: auth.userId,
+        recipientId: 'r1',
+        brokerAUserId: 'broker-a-1',
+        transferMethod: 'hawala_2_0',
+        verificationMethod: 'sms',
+        description: null,
+        status: TransactionStatus.FEEDBACK_SUBMITTED,
+        currentStage: null,
+        amount: '70.00',
+        currency: 'USD',
+        submittedAt: new Date(),
+        deliveryConfirmedAt: new Date(),
+        completedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        recipient: {
+          firstName: 'Karim',
+          lastName: 'Ahmadi',
+          normalizedPhone: '+937001234567',
+          phoneNumber: '7001234567',
+        },
+        brokerAUser: {
+          firstName: 'Broker',
+          lastName: 'Alpha',
+        },
+      });
+
+      txRepo.findOne.mockResolvedValue(tx);
+      histRepo.find.mockResolvedValue([]);
+      recipientFeedbackRepo.findOne.mockResolvedValue(null);
+      coordinatorAffirmationsRepo.findOne.mockResolvedValue(null);
+      brokerBAssignmentsRepo.find.mockResolvedValue([
+        {
+          id: 'asg-1',
+          transactionId: tx.id,
+          internalUserId: 'broker-b-1',
+          assignmentType: BrokerBAssignmentType.INTERNAL_USER,
+          assignmentStatus: BrokerBAssignmentStatus.ACCEPTED,
+          internalUser: { firstName: 'Jamshi', lastName: 'Khan' },
+        },
+      ]);
+
+      const out = await service.getDetailForCoordinator(auth, tx.id);
+
+      expect(txRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relations: ['recipient', 'brokerAUser'],
+        }),
+      );
+      expect(out.recipient_phone_number).toBe('+937001234567');
+      expect(out.broker_a_first_name).toBe('Broker');
+      expect(out.broker_a_last_name).toBe('Alpha');
+      expect(out.broker_b_first_name).toBe('Jamshi');
+      expect(out.broker_b_last_name).toBe('Khan');
+      expect(out.broker_b_assignment).toMatchObject({
+        id: 'asg-1',
+        assignment_status: BrokerBAssignmentStatus.ACCEPTED,
+      });
     });
   });
 

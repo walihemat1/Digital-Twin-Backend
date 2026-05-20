@@ -119,3 +119,16 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 - Env configuration:
   - `REG_VERIFICATION_CODE_TTL_SECONDS`, `REG_VERIFICATION_MAX_ATTEMPTS`, `REG_VERIFICATION_MAX_RESENDS`, `REG_VERIFICATION_RESEND_COOLDOWN_SECONDS`
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` (WhatsApp), `SENDGRID_API_KEY`, `EMAIL_FROM` (email)
+
+## Recipient transaction SMS
+
+Recipient SMS uses **two Twilio integrations** (see [.env.example](.env.example)):
+
+| When | What the recipient gets | Required configuration |
+|------|-------------------------|------------------------|
+| Broker B **accepts** | Authentication code + expected amount (in-person handoff to Broker B) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and **`TWILIO_FROM_NUMBER`** for the full message. Without `TWILIO_FROM_NUMBER`, the backend falls back to **Twilio Verify** (verification code only; amount may not appear in the carrier SMS). |
+| Broker B **confirms delivery** (code + amount verified) | Feedback link: `{FRONTEND_APP_BASE_URL}/feedback/{token}` for comment and actual amount received | Same Twilio account plus **`TWILIO_FROM_NUMBER`** and **`FRONTEND_APP_BASE_URL`** (must match your running frontend, e.g. `http://localhost:5173`). |
+
+In development (`NODE_ENV` not `production`), the backend logs `[Recipient SMS]` blocks to the terminal with the full payload even when Twilio is not configured.
+
+**Local test flow:** Broker B accept → check terminal or phone for auth SMS → Broker B confirm delivery with code + amount → check terminal or phone for feedback link SMS → open link in browser.

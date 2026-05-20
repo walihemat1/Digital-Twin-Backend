@@ -36,7 +36,7 @@ const authConfig = registerAs('auth', () => ({
     process.env.REG_VERIFICATION_RESEND_COOLDOWN_SECONDS ?? 60,
   ),
   frontendAppBaseUrl:
-    process.env.FRONTEND_APP_BASE_URL ?? 'http://localhost:3001',
+    process.env.FRONTEND_APP_BASE_URL ?? 'http://localhost:5173',
   passwordResetPath: process.env.PASSWORD_RESET_PATH ?? '/auth/reset-password',
   sendgridApiKey: process.env.SENDGRID_API_KEY ?? '',
   emailFrom: process.env.EMAIL_FROM ?? '',
