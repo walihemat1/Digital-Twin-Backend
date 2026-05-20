@@ -86,9 +86,17 @@ export type TransactionSummaryView = {
   /** Present when `recipient` relation was loaded. */
   recipient_first_name?: string;
   recipient_last_name?: string;
+  /** E.164 or stored dial string from `recipients.normalized_phone` / `phone_number`. */
+  recipient_phone_number?: string;
   /** Present when `coordinator` relation was loaded (Broker B list/detail). */
   coordinator_first_name?: string;
   coordinator_last_name?: string;
+  /** Present when `brokerAUser` relation was loaded (coordinator detail). */
+  broker_a_first_name?: string;
+  broker_a_last_name?: string;
+  /** Present when Broker B assignment user/contact was resolved (coordinator detail). */
+  broker_b_first_name?: string;
+  broker_b_last_name?: string;
   /** Present on summaries built from a full `Transaction` row. */
   transfer_method?: string;
 };
@@ -581,9 +589,36 @@ export class TransactionsService {
     };
   }
 
+  private brokerBAssignmentDisplayNames(
+    assignment: TransactionBrokerBAssignment | null | undefined,
+  ): Pick<
+    TransactionSummaryView,
+    'broker_b_first_name' | 'broker_b_last_name'
+  > {
+    if (assignment == null) {
+      return {};
+    }
+    const internal = assignment.internalUser;
+    if (internal != null) {
+      return {
+        broker_b_first_name: internal.firstName,
+        broker_b_last_name: internal.lastName,
+      };
+    }
+    const external = assignment.externalContact;
+    if (external != null) {
+      const display = external.displayName?.trim() ?? '';
+      if (display !== '') {
+        return { broker_b_first_name: display, broker_b_last_name: '' };
+      }
+    }
+    return {};
+  }
+
   private toSummary(tx: Transaction): TransactionSummaryView {
     const recipient = tx.recipient;
     const coordinator = tx.coordinator;
+    const brokerA = tx.brokerAUser;
     return {
       id: tx.id,
       coordinator_id: tx.coordinatorId,
@@ -600,12 +635,22 @@ export class TransactionsService {
         ? {
             recipient_first_name: recipient.firstName,
             recipient_last_name: recipient.lastName,
+            recipient_phone_number:
+              recipient.normalizedPhone?.trim() ||
+              recipient.phoneNumber?.trim() ||
+              undefined,
           }
         : {}),
       ...(coordinator != null
         ? {
             coordinator_first_name: coordinator.firstName,
             coordinator_last_name: coordinator.lastName,
+          }
+        : {}),
+      ...(brokerA != null
+        ? {
+            broker_a_first_name: brokerA.firstName,
+            broker_a_last_name: brokerA.lastName,
           }
         : {}),
     };
@@ -787,7 +832,7 @@ export class TransactionsService {
 
     const tx = await this.transactions.findOne({
       where: { id },
-      relations: ['recipient'],
+      relations: ['recipient', 'brokerAUser'],
     });
     if (!tx || tx.coordinatorId !== authUser.userId) {
       throw new NotFoundException('Transaction not found.');
@@ -805,10 +850,24 @@ export class TransactionsService {
       where: { transactionId: tx.id },
     });
 
-    return this.toDetail(tx, history, {
+    const brokerBAssignments = await this.brokerBAssignments.find({
+      where: { transactionId: tx.id },
+      relations: ['internalUser', 'externalContact'],
+      order: { assignedAt: 'DESC' },
+      take: 1,
+    });
+    const brokerBAssignment = brokerBAssignments[0] ?? null;
+
+    const detail = this.toDetail(tx, history, {
       recipientFeedback: feedback,
       coordinatorAffirmation: affirmation,
+      brokerBAssignment,
     });
+
+    return {
+      ...detail,
+      ...this.brokerBAssignmentDisplayNames(brokerBAssignment),
+    };
   }
 
   async getStatusHistoryForCoordinator(

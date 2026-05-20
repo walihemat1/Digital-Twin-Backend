@@ -41,6 +41,28 @@ export class TransactionWorkflowNotificationService {
     return `${base}/feedback/${rawToken}`;
   }
 
+  /** SMS body for delivery auth after Broker B accept (code + expected amount; no feedback link). */
+  buildDeliveryAuthSmsBody(tx: Transaction, plainCode: string): string {
+    return [
+      'Digital Twin:',
+      `Your authentication code is ${plainCode}.`,
+      `Expected amount: ${tx.amount} ${tx.currency}.`,
+      'Show this code to Broker B when you collect funds.',
+    ].join(' ');
+  }
+
+  /** Logs recipient SMS payload to the server terminal (omitted in production). */
+  private logRecipientSmsToTerminal(
+    kind: string,
+    fields: Record<string, string>,
+  ): void {
+    if (process.env.NODE_ENV === 'production') return;
+    const body = Object.entries(fields)
+      .map(([key, value]) => `  ${key}: ${value}`)
+      .join('\n');
+    this.log.log(`[Recipient SMS] ${kind}\n${body}`);
+  }
+
   async notifyCoordinatorBrokerBAccepted(
     tx: Transaction,
     plainCode: string,
@@ -64,10 +86,33 @@ export class TransactionWorkflowNotificationService {
     plainCode: string,
     authCodeId: string,
   ): Promise<void> {
-    const sent = await this.twilioVerify.sendDeliveryAuthCodeSms(
-      recipient.phoneNumber,
-      plainCode,
-    );
+    const message = this.buildDeliveryAuthSmsBody(tx, plainCode);
+    let sent = false;
+    let channel = 'none';
+
+    if (this.sms.isReady) {
+      sent = await this.sms.sendTransactionalSms(recipient.phoneNumber, message);
+      channel = 'sms (Twilio Messages)';
+    }
+    if (!sent) {
+      sent = await this.twilioVerify.sendDeliveryAuthCodeSms(
+        recipient.phoneNumber,
+        plainCode,
+      );
+      if (sent) {
+        channel = 'sms (Twilio Verify; code only — configure TWILIO_FROM_NUMBER for full message with amount)';
+      }
+    }
+
+    this.logRecipientSmsToTerminal('Delivery authentication', {
+      to: recipient.phoneNumber,
+      message,
+      authenticationCode: plainCode,
+      amount: `${tx.amount} ${tx.currency}`,
+      transactionId: tx.id,
+      channel,
+      deliveryStatus: sent ? 'sent' : 'not_sent',
+    });
     await this.authCodes.update(
       { id: authCodeId },
       {
@@ -108,6 +153,14 @@ export class TransactionWorkflowNotificationService {
     ].join(' ');
 
     const sent = await this.sms.sendTransactionalSms(recipient.phoneNumber, body);
+    this.logRecipientSmsToTerminal('Feedback invitation', {
+      to: recipient.phoneNumber,
+      feedbackLink: url,
+      message: body,
+      transactionId: tx.id,
+      channel: 'sms (Twilio Messages)',
+      deliveryStatus: sent ? 'sent' : 'not_sent',
+    });
     if (!sent) {
       this.log.warn(
         `Feedback SMS skipped (TWILIO_FROM_NUMBER not configured) for tx=${tx.id}`,

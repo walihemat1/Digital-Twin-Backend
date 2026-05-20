@@ -83,7 +83,7 @@ export const envValidationSchema = Joi.object({
     .min(300)
     .default(604800),
   /** Base URL for building password reset links, e.g. `https://app.example.com` */
-  FRONTEND_APP_BASE_URL: Joi.string().default('http://localhost:3001'),
+  FRONTEND_APP_BASE_URL: Joi.string().default('http://localhost:5173'),
   /** Path appended to base; reset link: `${FRONTEND_APP_BASE_URL}${PASSWORD_RESET_PATH}?token=...` */
   PASSWORD_RESET_PATH: Joi.string().default('/auth/reset-password'),
 
